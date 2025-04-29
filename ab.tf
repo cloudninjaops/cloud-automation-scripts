@@ -20,7 +20,7 @@ locals {
       merge(s, {
         Principal = merge(s.Principal, {
           AWS = distinct(concat(
-            (s.Principal.AWS if can(s.Principal.AWS) else []),
+            can(s.Principal.AWS) ? s.Principal.AWS : [],
             [local.new_role_arn]
           ))
         })
@@ -28,11 +28,13 @@ locals {
     )
   ]
 
+  # Encode final updated policy back to JSON
   updated_policy = jsonencode({
     Version   = local.existing_policy.Version
     Statement = local.updated_statements
   })
 }
+
 
 resource "aws_kms_key_policy" "update_policy_with_append" {
   key_id = data.aws_kms_key.golden_key.key_id
