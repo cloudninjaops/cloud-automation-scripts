@@ -103,3 +103,7 @@ resource "aws_iam_role_policy_attachment" "common_cross_lambda_attach" {
 
 
 
+  function_ordinal = index([
+    for fname, fval in try(local.cloud_components.lambdas, {}) :
+    fname if fname != "use_common_role"
+  ], each.key) + 1
