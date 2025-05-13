@@ -107,3 +107,12 @@ resource "aws_iam_role_policy_attachment" "common_cross_lambda_attach" {
     for fname, fval in try(local.cloud_components.lambdas, {}) :
     fname if fname != "use_common_role"
   ], each.key) + 1
+
+
+  role = var.use_common_role
+  ? (
+      var.function_ordinal == 1
+        ? aws_iam_role.lambda[0].arn
+        : data.aws_iam_role.common[0].arn
+    )
+  : aws_iam_role.lambda[0].arn
