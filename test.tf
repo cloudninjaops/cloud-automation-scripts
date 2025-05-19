@@ -116,3 +116,15 @@ resource "aws_iam_role_policy_attachment" "common_cross_lambda_attach" {
         : data.aws_iam_role.common[0].arn
     )
   : aws_iam_role.lambda[0].arn
+
+
+
+  data "aws_caller_identity" "current" {}
+
+output "terraform_execution_role_info" {
+  value = {
+    account_id = data.aws_caller_identity.current.account_id
+    user_id    = data.aws_caller_identity.current.user_id
+    arn        = data.aws_caller_identity.current.arn
+  }
+}
