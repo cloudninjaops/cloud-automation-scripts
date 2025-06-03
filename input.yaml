@@ -1,23 +1,8 @@
-xyz:
-  redshift:
-    # Classic Redshift Inputs
-    username: "test"
-    node_type: "dc2.large"
-    cluster_type: "multi-node"
-    cluster_version: "1.8"
-    number_of_nodes: 1
-    input_bucket: "input_bucket"
-    output_bucket: "output_bucket"
-    security_group: "xyz-security-group"
-    skip_final_snapshot: false
-    key_pair_1:
-      key_name: "Ass_kns_key"
-    kms_key: "key_1"
+cloud:
+  kendra:
+    index_1:
+      name: "cmp-ai-index"                    # Name of the Kendra index
+      edition: "DEVELOPER_EDITION"            # Choose between DEVELOPER_EDITION or ENTERPRISE_EDITION
+      description: "Index for Compass AI"     # Optional description
+      encryption_key: key_1                   # Refers to cloud.kms.key_1 (defined under kms)
 
-    # Common flag to choose type
-    enable_serverless: true
-
-    # Serverless-specific Inputs
-    namespace: "xyz-analytics"
-    workgroup_name: "xyz-wg"
-    base_capacity: 32
