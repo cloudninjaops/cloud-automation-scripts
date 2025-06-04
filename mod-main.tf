@@ -27,3 +27,22 @@ resource "aws_kendra_index" "this" {
 
   tags = var.tags
 }
+
+
+resource "aws_kendra_index" "this" {
+  name        = var.kendra_index_name
+  role_arn    = var.role_arn
+  edition     = var.edition
+  description = var.description
+
+  dynamic "capacity_units" {
+    for_each = var.edition == "ENTERPRISE_EDITION" ? [1] : []
+    content {
+      query_units   = var.query_units
+      storage_units = var.storage_units
+    }
+  }
+
+  tags = var.tags
+}
+
