@@ -24,3 +24,14 @@ module "kendra_indexes" {
     aws.network = aws.network
   }
 }
+
+kendra_index_name = lower(join("-", [
+  "fepoc",                                                    # Fixed organization name
+  var.env_type,                                               # e.g., dev
+  var.env_name,                                               # e.g., dv
+  lookup(var.region_short, var.region),                       # e.g., e1
+  "kendra",                                                   # Resource type
+  var.app_name,                                               # e.g., cmpesai
+  format("%03d", each.value.grp_ordinal)                      # Ordinal padded to 3 digits
+]))
+
