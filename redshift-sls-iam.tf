@@ -121,3 +121,15 @@ resource "aws_iam_role_policy" "redshift_commands_policy" {
     ]
   })
 }
+
+#-------
+
+data "aws_iam_roles" "existing_redshift_slr" {
+  name_regex = "^AWSServiceRoleForRedshift$"
+}
+
+resource "aws_iam_service_linked_role" "redshift" {
+  count             = (length(data.aws_iam_roles.existing_redshift_slr.names) == 0 && var.enable_serverless) ? 1 : 0
+  aws_service_name  = "redshift.amazonaws.com"
+  description       = "Service-linked role for Redshift"
+}
