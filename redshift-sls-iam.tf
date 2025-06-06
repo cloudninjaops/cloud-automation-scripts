@@ -133,3 +133,10 @@ resource "aws_iam_service_linked_role" "redshift" {
   aws_service_name  = "redshift.amazonaws.com"
   description       = "Service-linked role for Redshift"
 }
+
+
+locals {
+  redshift_service_role_arn = length(data.aws_iam_roles.existing_redshift_slr.arns) > 0 ?
+    data.aws_iam_roles.existing_redshift_slr.arns[0] :
+    aws_iam_service_linked_role.redshift[0].arn
+}
