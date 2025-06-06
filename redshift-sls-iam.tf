@@ -136,7 +136,9 @@ resource "aws_iam_service_linked_role" "redshift" {
 
 
 locals {
-  redshift_service_role_arn = length(data.aws_iam_roles.existing_redshift_slr.arns) > 0 ?
-    data.aws_iam_roles.existing_redshift_slr.arns[0] :
-    aws_iam_service_linked_role.redshift[0].arn
+  redshift_sls_service_role_arn = (
+    length(data.aws_iam_roles.existing_redshift_slr.arns) > 0
+    ? tolist(data.aws_iam_roles.existing_redshift_slr.arns)[0]
+    : aws_iam_service_linked_role.redshift_sls_aws_service_role.arn
+  )
 }
