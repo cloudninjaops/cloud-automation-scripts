@@ -5,4 +5,55 @@ cloud:
       edition: "DEVELOPER_EDITION"            # Choose between DEVELOPER_EDITION or ENTERPRISE_EDITION
       description: "Index for Compass AI"     # Optional description
       encryption_key: key_1                   # Refers to cloud.kms.key_1 (defined under kms)
+  vpc_endpoints:
+    ec2_interface:
+      type: "Interface"
+      service_type: "ec2"
+      security_groups:
+        - gwlb_sg
+      private_dns_enabled: true
+
+    s3_gateway:
+      type: "Gateway"
+      service_type: "s3"
+      route_table_association: true
+
+    s3_interface:
+      type: "Interface"
+      service_type: "s3"
+      security_groups:
+        - gwlb_sg
+      private_dns_enabled: true
+
+    dynamodb_gateway:
+      type: "Gateway"
+      service_type: "dynamodb"
+      route_table_association: true
+
+    dynamodb_interface:
+      type: "Interface"
+      service_type: "dynamodb"
+      security_groups:
+        - gwlb_sg
+      private_dns_enabled: true
+
+    cloudwatch_interface:
+      type: "Interface"
+      service_type: "monitoring"
+      security_groups:
+        - gwlb_sg
+      private_dns_enabled: true
+
+    logs_interface:
+      type: "Interface"
+      service_type: "logs"
+      security_groups:
+        - gwlb_sg
+      private_dns_enabled: true
+
+    gwlb_example:
+      type: "GatewayLoadBalancer"
+      service_type: "gwlb"
+      security_groups:
+        - gwlb_sg
 
