@@ -62,3 +62,15 @@ module "vpc_endpoint" {
 
   tags = local.optional_tags
 }
+
+
+vpc_endpoint_ordinals = flatten([
+  for k, grp in local.cloud_components.vpc_endpoints : [
+    for idx, v in enumerate(grp) : {
+      category = try(v.category, "default")
+      ordinal  = format("%03d", idx + 1)
+      endpoint_key = k
+      # Include other needed fields
+    }
+  ]
+])
