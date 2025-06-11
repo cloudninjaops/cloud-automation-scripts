@@ -29,7 +29,7 @@ locals {
 }
 
 module "vpc_endpoint" {
-  source  = "app.terraform.io/fepoc/vpc-endpoint/aws"
+  source  = "app.terraform.io/sss/vpc-endpoint/aws"
   version = "1.0.0"
 
   for_each = local.vpc_endpoint_final_list
