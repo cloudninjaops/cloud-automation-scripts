@@ -8,7 +8,6 @@ locals {
   }
 }
 
-
 module "kendra_indexes" {
   source = "app.terraform.io/sss/kendra/aws"
 
@@ -20,22 +19,21 @@ module "kendra_indexes" {
   kms_key_id  = local.kms_keys[each.value.encryption_key]
   tags        = local.optional_tags
 
+  ordinal = index(keys(local.kendra_indexes), each.key) + 1
+
+  kendra_index_name = lower(join("-", [
+    "test",                                                  
+    var.env_type,                                             
+    var.env_name,                                             # e.g., dev
+    lookup(var.region_short, var.region),                     # e.g., e1
+    "kendra",                                                 # Resource
+    var.app_name,                                             # e.g., cmpesai
+    format("%03d", ordinal)                                   # Pad to 3 digits
+  ]))
+
   providers = {
     aws.network = aws.network
   }
 }
-
-ordinal = index(keys(local.cloud_components.kendra), each.key) + 1
-
-
-kendra_index_name = lower(join("-", [
-  "test",                                                  
-  var.env_type,                                             
-  var.env_name,                                             # e.g., dev
-  lookup(var.region_short, var.region),                     # e.g., e1
-  "kendra",                                                 # Resource
-  var.app_name,                                             # e.g., cmpesai
-  format("%03d", each.value.ordinal)                        # Pad to 3 digits
-]))
 
 
