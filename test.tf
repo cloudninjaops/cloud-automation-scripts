@@ -58,3 +58,9 @@ resource "aws_vpc_endpoint" "this" {
     Name = local.endpoint_name
   })
 }
+
+vpc_endpoint_final_list = length(local.vpc_endpoint_ordinals) > 0 ? merge([
+  for k, v in local.vpc_endpoint_ordinals : {
+    "${v.category}_${v.ordinal}" = v
+  }
+]) : {}

@@ -26,6 +26,12 @@ locals {
   vpc_endpoint_name_map = {
     for key, value in local.vpc_endpoint_final_list : value.endpoint_key => key
   }
+
+  vpc_endpoint_final_list = length(local.vpc_endpoint_ordinals) > 0 ? merge([
+  for k, v in local.vpc_endpoint_ordinals : {
+    "${v.category}_${v.ordinal}" = v
+  }
+]) : {}
 }
 
 module "vpc_endpoint" {
