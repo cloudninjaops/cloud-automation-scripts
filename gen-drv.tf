@@ -74,3 +74,17 @@ vpc_endpoint_ordinals = flatten([
     }
   ]
 ])
+
+
+vpc_endpoint_ordinals = flatten([
+  for key, list in local.cloud_components.vpc_endpoints : [
+    for idx in range(length(list)) : merge(
+      list[idx],
+      {
+        endpoint_key = key
+        category     = try(list[idx].category, "default")
+        ordinal      = format("%03d", idx + 1)
+      }
+    )
+  ]
+])
