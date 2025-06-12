@@ -64,3 +64,62 @@ vpc_endpoint_final_list = length(local.vpc_endpoint_ordinals) > 0 ? merge([
     "${v.category}_${v.ordinal}" = v
   }
 ]) : {}
+
+
+
+resource "aws_security_group" "vpce_sg" {
+  for_each = {
+    for sg_key in var.referenced_security_groups :
+    sg_key => var.security_groups[sg_key]
+  }
+
+  name        = "${each.key}-${var.app_name}-${var.env_type}"
+  description = each.value.additional_description
+  vpc_id      = var.vpc_id
+  tags        = var.tags
+}
+
+#-------
+
+resource "aws_security_group" "vpce_sg" {
+  for_each = { for sg_key in var.referenced_security_groups : sg_key => var.security_groups[sg_key] }
+
+  name        = "${each.key}-${var.app_name}-${var.env_type}"
+  description = each.value.additional_description
+  vpc_id      = var.vpc_id
+
+  tags = merge(
+    var.tags,
+    {
+      Name = "${each.key}-${var.app_name}-${var.env_type}"
+    }
+  )
+}
+
+resource "aws_security_group_rule" "vpce_sg_ingress" {
+  for_each = {
+    for sg_key in var.referenced_security_groups : sg_key => var.security_groups[sg_key].ingress
+  }
+
+  count = length(each.value)
+
+  type              = "ingress"
+  from_port         = each.value[count.index].from_port
+  to_port           = each.value[count.index].to_port
+  protocol          = tostring(each.value[count.index].protocol)
+  cidr_blocks       = each.value[count.index].cidr_blocks
+  security_group_id = aws_security_group.vpce_sg[each.key].id
+}
+
+
+variable "security_groups" {
+  description = "All available security group configurations"
+  type        = map(any)
+  default     = {}
+}
+
+variable "referenced_security_groups" {
+  description = "List of security group keys used by this endpoint"
+  type        = list(string)
+  default     = []
+}
