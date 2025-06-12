@@ -1,18 +1,8 @@
-referenced_security_groups = {
-  for sg_key in distinct(flatten([
-    for ep in local.cloud_components.vpc_endpoints : try(ep.security_groups, [])
-  ])) :
-  sg_key => local.cloud_components.security_groups[sg_key]
-  if contains(keys(local.cloud_components.security_groups), sg_key)
+locals {
+  referenced_security_groups = distinct(flatten([
+    for ep_key, ep_val in local.cloud_components.vpc_endpoints : 
+    try(ep_val.security_groups, [])
+  ]))
+
+  security_groups = try(local.cloud_components.security_groups, {})
 }
-
-
-referenced_security_groups = {
-  for sg_key in distinct(flatten([
-    for ep in local.cloud_components.vpc_endpoints : try(ep.security_groups, [])
-  ])) :
-  sg_key => local.cloud_components.security_groups[sg_key]
-  if contains(keys(local.cloud_components.security_groups), sg_key)
-}
-
-security_groups = local.cloud_components.security_groups
