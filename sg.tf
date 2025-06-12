@@ -78,3 +78,36 @@ resource "aws_vpc_endpoint" "this" {
     Name = "vpce-${var.service_name}"
   }
 }
+
+###--------
+
+locals {
+  referenced_security_group_keys = tolist(keys(var.referenced_security_groups))
+
+  referenced_security_groups_with_ordinals = {
+    for idx, key in local.referenced_security_group_keys :
+    key => merge(
+      var.referenced_security_groups[key],
+      { sg_ordinal = idx + 1 }
+    )
+  }
+}
+
+
+resource "aws_security_group" "vpce_sg" {
+  for_each = local.referenced_security_groups_with_ordinals
+  sg_key   = each.key
+
+  name = lower(join("-", compact([
+    var.organization,
+    lookup(var.region_short, var.region),
+    var.rule_category,
+    var.env_type,
+    var.env_name,
+    var.app_name,
+    replace(each.value.additional_description, " ", "-"),
+    each.value.sg_ordinal != 0 ? tostring(each.value.sg_ordinal) : ""
+  ])))
+
+  ...
+}
