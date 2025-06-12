@@ -123,3 +123,62 @@ variable "referenced_security_groups" {
   type        = list(string)
   default     = []
 }
+
+
+#------
+
+resource "aws_security_group" "vpce_sg" {
+  for_each = {
+    for sg_key in var.referenced_security_groups :
+    sg_key => var.security_groups[sg_key]
+  }
+
+  name = lower(join("-", compact([
+    var.organization,
+    lookup(var.region_short, var.region),
+    var.rule_category,
+    var.env_type,
+    var.env_name,
+    var.app_name,
+    replace(each.value.additional_description, " ", "-"),
+    var.sg_ordinal != 0 ? tostring(var.sg_ordinal) : ""
+  ])))
+
+  description         = "Security group for ${var.app_name}"
+  revoke_rules_on_delete = false
+  vpc_id              = var.vpc_id
+
+  dynamic "ingress" {
+    for_each = try(each.value.ingress, {})
+
+    content {
+      description      = try(ingress.value.description, "ingress for ${var.app_name}")
+      from_port        = try(ingress.value.protocol, null) == "-1" ? 0 : try(ingress.value.from_port, null)
+      to_port          = try(ingress.value.protocol, null) == "-1" ? 0 : try(ingress.value.to_port, null)
+      protocol         = try(ingress.value.protocol, null)
+      cidr_blocks      = try(ingress.value.cidr_blocks, null)
+      self             = try(ingress.value.self_referencing, false)
+    }
+  }
+
+  dynamic "egress" {
+    for_each = try(each.value.egress, {})
+
+    content {
+      description      = try(egress.value.description, "egress for ${var.app_name}")
+      from_port        = try(egress.value.protocol, null) == "-1" ? 0 : try(egress.value.from_port, null)
+      to_port          = try(egress.value.protocol, null) == "-1" ? 0 : try(egress.value.to_port, null)
+      protocol         = try(egress.value.protocol, null)
+      cidr_blocks      = try(egress.value.cidr_blocks, null)
+      self             = try(egress.value.self_referencing, false)
+    }
+  }
+
+  tags = var.tags
+
+  lifecycle {
+    ignore_changes = [
+      tags["tfc_run_id"]
+    ]
+  }
+}
