@@ -6,3 +6,4 @@ locals {
 
   security_groups = try(local.cloud_components.security_groups, {})
 }
+  policy = file("${path.module}/policies/s3_policy.json") # or inline string
