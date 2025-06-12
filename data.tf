@@ -29,3 +29,11 @@ data "aws_route_tables" "default" {
 
 # (Optional) Caller account ID – useful for logging/debugging
 data "aws_caller_identity" "current" {}
+
+
+resource "null_resource" "debug_vpc_info" {
+  triggers = {
+    vpc_id     = var.vpc_id
+    subnet_ids = join(",", var.subnet_ids)
+  }
+}
