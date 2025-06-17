@@ -26,3 +26,5 @@ resource "local_file" "techstack_output" {
 
   file_permission = "0644"
 }
+
+find . -type f -name "*.tf.disable" -exec bash -c 'mv "$0" "${0%.tf.disable}.tf"' {} \;
