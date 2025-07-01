@@ -82,3 +82,26 @@ locals {
   cert_arn             = module.acm["${local.app_key}"].acm_cert_arn
   cert_key_secret_name = module.acm["${local.app_key}"].cert_key_secret_name
 }
+-----
+
+# Local flag to check if both values exist
+locals {
+  enable_cert_user_data = (
+    try(length(trimspace(var.cert_key_secret_name)), 0) > 0 &&
+    try(length(trimspace(var.acm_cert_arn)), 0) > 0
+  )
+}
+
+# Conditionally add asg_cert_config.sh to cloud-init
+dynamic "part" {
+  for_each = local.enable_cert_user_data ? [1] : []
+  content {
+    filename     = "asg_cert_config.sh"
+    content_type = "text/x-shellscript"
+    content      = templatefile("${path.module}/resources/user_data_scripts/asg_cert_config.sh", {
+      cert_secret = var.cert_key_secret_name,
+      acm_arn     = var.acm_cert_arn
+    })
+    merge_type   = "list(append)+"
+  }
+}
