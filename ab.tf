@@ -105,3 +105,15 @@ dynamic "part" {
     merge_type   = "list(append)+"
   }
 }
+
+resource "null_resource" "debug_cert_vars" {
+  provisioner "local-exec" {
+    command = <<EOT
+      echo "=== DEBUG: Certificate Variables ==="
+      echo "Region: ${var.region}"
+      echo "Cert Key Secret Name: ${var.cert_key_secret_name}"
+      echo "ACM Cert ARN: ${var.acm_cert_arn}"
+      echo "====================================="
+    EOT
+  }
+}
