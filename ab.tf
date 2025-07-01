@@ -8,3 +8,5 @@ resource "aws_secretsmanager_secret_version" "acm_key_version" {
   secret_id     = aws_secretsmanager_secret.acm_key.id
   secret_string = data.external.get-certificate.result.private_key
 }
+
+<OrganizationName>-<EnvironmentType>-<EnvironmentName>-<Region>-sm-<Application>-<Purpose>-<Ordinal###>
