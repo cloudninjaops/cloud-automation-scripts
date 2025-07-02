@@ -36,7 +36,7 @@ if [[ -n "$REGION" && -n "$SECRET_NAME" ]]; then
         --output text > /etc/ssl/private/app.key
 
     if [[ -s /etc/ssl/private/app.key ]]; then
-        echo "Private key saved to /etc/ssl/private/app.key"
+        echo " Private key saved to /etc/ssl/private/app.key"
         chmod 600 /etc/ssl/private/app.key
     else
         echo " Failed to write private key file"
@@ -61,9 +61,9 @@ if [[ -n "$REGION" && -n "$ACM_ARN" ]]; then
         echo "$CERT_CONTENT" > /etc/ssl/certs/fullchain.pem
         echo "$CHAIN_CONTENT" >> /etc/ssl/certs/fullchain.pem
         chmod 644 /etc/ssl/certs/fullchain.pem
-        echo "Certificate and chain written to /etc/ssl/certs/fullchain.pem"
+        echo " Certificate and chain written to /etc/ssl/certs/fullchain.pem"
     else
-        echo "Failed to extract cert or chain from ACM"
+        echo " Failed to extract cert or chain from ACM"
     fi
 else
     echo "Missing REGION or ACM_ARN — skipping fullchain setup."
