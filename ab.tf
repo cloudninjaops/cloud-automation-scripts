@@ -39,3 +39,14 @@ dynamic "iam_instance_profile" {
 }
 
 ----
+locals {
+  iam_instance_profile_name = try(
+    var.iam_instance_profile != null ? var.iam_instance_profile :
+    (
+      var.cert_key_secret_name != null && var.acm_cert_arn != null ?
+      aws_iam_instance_profile.cert_secret_reader_profile[0].name :
+      null
+    ),
+    null
+  )
+}
