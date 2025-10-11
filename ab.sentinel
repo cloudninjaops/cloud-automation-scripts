@@ -1,0 +1,17 @@
+import "tfplan/v2" as tfplan
+
+# Check all aws_s3_bucket_public_access_block resources
+public_blocks = filter tfplan.resource_changes as _, r {
+    r.type is "aws_s3_bucket_public_access_block"
+}
+
+violations = filter public_blocks as _, r {
+    r.change.after.block_public_acls is false or
+    r.change.after.ignore_public_acls is false or
+    r.change.after.block_public_policy is false or
+    r.change.after.restrict_public_buckets is false
+}
+
+main = rule {
+    length(violations) is 0
+}
