@@ -3,40 +3,55 @@ import "json"
 
 violating_resources = []
 
-# Safely get all resource changes
+# Safe guard against undefined tfplan data
 resource_changes = tfplan.resource_changes else []
 
-# Find S3 buckets explicitly tagged for CloudTrail logging
+# Get all S3 buckets tagged for CloudTrail logging
 cloudtrail_buckets = filter resource_changes as address, rc {
     rc.type is "aws_s3_bucket" and
+    rc.change.after is not null and
     rc.change.after.tags is not null and
     rc.change.after.tags["cloudtrail_logs"] is "true"
 } else []
 
-# Iterate through CloudTrail-tagged buckets
-for cloudtrail_buckets as address, bucket {
-    bucket_policy = tfplan.find_resources("aws_s3_bucket_policy").where("bucket", bucket.change.after.bucket)
-    if length(bucket_policy) > 0 {
-        policy_string = bucket_policy[0].change.after.policy
-        if policy_string is not null {
-            policy_document = json.unmarshal(policy_string)
-            for policy_document.Statement as statement {
-                if statement.Effect is "Allow" and (statement.Principal is "*" or (type(statement.Principal) is "map" and statement.Principal["AWS"] is "*")) {
-                    append(violating_resources, address)
+# Defensive check to avoid looping on undefined
+if cloudtrail_buckets is undefined or length(cloudtrail_buckets) == 0 {
+    print("No CloudTrail buckets found in this plan.")
+    main = rule { true }
+} else {
+
+    # Iterate through CloudTrail-tagged buckets
+    for cloudtrail_buckets as address, bucket {
+        bucket_policies = filter resource_changes as _, rc {
+            rc.type is "aws_s3_bucket_policy" and
+            rc.change.after is not null and
+            rc.change.after.bucket is bucket.change.after.bucket
+        } else []
+
+        if length(bucket_policies) > 0 {
+            policy_string = bucket_policies[0].change.after.policy
+            if policy_string is not null {
+                policy_document = json.unmarshal(policy_string)
+                for policy_document.Statement as statement {
+                    if statement.Effect is "Allow" and
+                       (statement.Principal is "*" or
+                       (type(statement.Principal) is "map" and statement.Principal["AWS"] is "*")) {
+                        append(violating_resources, address)
+                    }
                 }
             }
         }
     }
-}
 
-violating_resources_exist = rule {
-    length(violating_resources) > 0
-}
+    violating_resources_exist = rule {
+        length(violating_resources) > 0
+    }
 
-main = rule {
-    not violating_resources_exist
-}
+    main = rule {
+        not violating_resources_exist
+    }
 
-if violating_resources_exist {
-    print("The following CloudTrail S3 buckets have public-access bucket policies:", violating_resources)
+    if violating_resources_exist {
+        print("The following CloudTrail S3 buckets have public-access bucket policies:", violating_resources)
+    }
 }
