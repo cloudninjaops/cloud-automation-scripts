@@ -1,29 +1,42 @@
-mock "tfplan/v2" {
-  module {
-    source = "tfplan/v2.sentinelmock"
-  }
-  data = {
-    "resource_changes": [
-      {
-        "type": "aws_s3_bucket",
-        "address": "aws_s3_bucket.cloudtrail",
-        "change": {
-          "after": {
-            "tags": { "cloudtrail_logs": "true" },
-            "bucket": "my-cloudtrail-bucket"
-          }
+import "tfplan/v2" as tfplan
+import "json"
+
+violating_resources = []
+
+# Safely get all resource changes
+resource_changes = tfplan.resource_changes else []
+
+# Find S3 buckets explicitly tagged for CloudTrail logging
+cloudtrail_buckets = filter resource_changes as address, rc {
+    rc.type is "aws_s3_bucket" and
+    rc.change.after.tags is not null and
+    rc.change.after.tags["cloudtrail_logs"] is "true"
+} else []
+
+# Iterate through CloudTrail-tagged buckets
+for cloudtrail_buckets as address, bucket {
+    bucket_policy = tfplan.find_resources("aws_s3_bucket_policy").where("bucket", bucket.change.after.bucket)
+    if length(bucket_policy) > 0 {
+        policy_string = bucket_policy[0].change.after.policy
+        if policy_string is not null {
+            policy_document = json.unmarshal(policy_string)
+            for policy_document.Statement as statement {
+                if statement.Effect is "Allow" and (statement.Principal is "*" or (type(statement.Principal) is "map" and statement.Principal["AWS"] is "*")) {
+                    append(violating_resources, address)
+                }
+            }
         }
-      },
-      {
-        "type": "aws_s3_bucket_policy",
-        "address": "aws_s3_bucket_policy.cloudtrail",
-        "change": {
-          "after": {
-            "bucket": "my-cloudtrail-bucket",
-            "policy": "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\"}]}"
-          }
-        }
-      }
-    ]
-  }
+    }
+}
+
+violating_resources_exist = rule {
+    length(violating_resources) > 0
+}
+
+main = rule {
+    not violating_resources_exist
+}
+
+if violating_resources_exist {
+    print("The following CloudTrail S3 buckets have public-access bucket policies:", violating_resources)
 }
