@@ -9,37 +9,37 @@ violations = [];
 # --------------------------- Helpers ---------------------------------------
 
 normalize_statements = func(doc) {
-    if type(doc) is not "map" or doc.Statement is undefined { return []; };
+    if type(doc) is not "map" or doc.Statement is undefined { return []; }
     stmts = doc.Statement;
-    if type(stmts) is "map" { return [stmts]; };
-    if type(stmts) is "list" { return stmts; };
+    if type(stmts) is "map" { return [stmts]; }
+    if type(stmts) is "list" { return stmts; }
     return [];
 };
 
 statement_enforces_https = func(st) {
-    if type(st) is not "map" { return false; };
-    if st.Effect is not "Deny" { return false; };
-    if st.Condition is null { return false; };
-    if type(st.Condition) is not "map" { return false; };
+    if type(st) is not "map" { return false; }
+    if st.Effect is not "Deny" { return false; }
+    if st.Condition is null { return false; }
+    if type(st.Condition) is not "map" { return false; }
 
     has_bool = false;
     if st.Condition.Bool is not null and type(st.Condition.Bool) is "map" {
         v = st.Condition.Bool["aws:SecureTransport"];
-        if v is "false" or v is false { has_bool = true; };
-    };
+        if v is "false" or v is false { has_bool = true; }
+    }
 
     has_bie = false;
     if st.Condition.BoolIfExists is not null and type(st.Condition.BoolIfExists) is "map" {
         v2 = st.Condition.BoolIfExists["aws:SecureTransport"];
-        if v2 is "false" or v2 is false { has_bie = true; };
-    };
+        if v2 is "false" or v2 is false { has_bie = true; }
+    }
 
     return has_bool or has_bie;
 };
 
 has_https_enforcement = func(policy_doc) {
     stmts = normalize_statements(policy_doc);
-    return any stmts as _, st { statement_enforces_https(st); };
+    return any stmts as _, st { statement_enforces_https(st) };
 };
 
 # --------------------------- Collect ---------------------------------------
@@ -49,12 +49,12 @@ resource_changes = tfplan.resource_changes else [];
 buckets = filter resource_changes as _, rc {
     rc.type is "aws_s3_bucket" and
     rc.change.after is not null and
-    rc.change.after.bucket is not null;
+    rc.change.after.bucket is not null
 } else [];
 
 if buckets is undefined {
     append(violations, "tfplan.resource_changes undefined");
-};
+}
 
 # --------------------------- Evaluate --------------------------------------
 
@@ -64,19 +64,19 @@ for buckets as _, b {
     policies = filter resource_changes as _, rc {
         rc.type is "aws_s3_bucket_policy" and
         rc.change.after is not null and
-        rc.change.after.bucket is bucket_name;
+        rc.change.after.bucket is bucket_name
     } else [];
 
     if length(policies) == 0 {
         append(violations, sprintf("%s: missing bucket policy", b.address));
         continue;
-    };
+    }
 
     policy_str = policies[0].change.after.policy;
     if policy_str is null {
         append(violations, sprintf("%s: bucket policy is null", b.address));
         continue;
-    };
+    }
 
     ok = true;
     policy_doc = null;
@@ -84,21 +84,21 @@ for buckets as _, b {
         policy_doc = json.unmarshal(policy_str);
     } catch {
         ok = false;
-    };
+    }
     if not ok {
         append(violations, sprintf("%s: invalid JSON policy", b.address));
         continue;
-    };
+    }
 
     if not has_https_enforcement(policy_doc) {
         append(violations, sprintf("%s: missing aws:SecureTransport deny rule", b.address));
-    };
-};
+    }
+}
 
 # --------------------------- Decision --------------------------------------
 
-main = rule { length(violations) == 0; };
+main = rule { length(violations) == 0 };
 
 if length(violations) > 0 {
     print("S3 HTTPS enforcement violations (safe-fail):", violations);
-};
+}
