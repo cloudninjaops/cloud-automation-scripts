@@ -1,51 +1,54 @@
-# s3_require_https_only.sentinel
-# Enforce HTTPS-only access for every aws_s3_bucket in the plan.
-# Safe-fail: unknown / missing / unparsable => violation.
+# CIS_S3_Enforce_SecureTransport.sentinel
+# Enforce HTTPS-only access for every aws_s3_bucket in the plan (safe-fail).
 
 import "tfplan/v2" as tfplan
 import "json"
 
 violations = []
 
-# ---------------------------------------------------------------------------
-# Helper: verify that policy document contains Deny for aws:SecureTransport=false
-# ---------------------------------------------------------------------------
-has_https_enforcement = func(policy_doc) {
-    if type(policy_doc) is not "map" or policy_doc.Statement is undefined {
-        return false
-    }
+# --------------------------- Helpers ---------------------------------------
 
-    statements = policy_doc.Statement
-    if type(statements) is "map" {
-        statements = [statements]
-    }
-
-    return any statements as _, st {
-        st.Effect is "Deny" and
-        st.Condition is not null and
-        type(st.Condition) is "map" and (
-            (
-                st.Condition.Bool is not null and
-                type(st.Condition.Bool) is "map" and
-                (
-                    st.Condition.Bool["aws:SecureTransport"] is "false" or
-                    st.Condition.Bool["aws:SecureTransport"] is false
-                )
-            ) or (
-                st.Condition.BoolIfExists is not null and
-                type(st.Condition.BoolIfExists) is "map" and
-                (
-                    st.Condition.BoolIfExists["aws:SecureTransport"] is "false" or
-                    st.Condition.BoolIfExists["aws:SecureTransport"] is false
-                )
-            )
-        )
-    }
+# Normalize Statement to a list
+normalize_statements = func(doc) {
+    if type(doc) is not "map" or doc.Statement is undefined { return [] }
+    stmts = doc.Statement
+    if type(stmts) is "map" { return [stmts] }
+    if type(stmts) is "list" { return stmts }
+    return []
 }
 
-# ---------------------------------------------------------------------------
-# Collect and evaluate S3 bucket policies
-# ---------------------------------------------------------------------------
+# Does a single statement enforce Deny when aws:SecureTransport == false?
+statement_enforces_https = func(st) {
+    if type(st) is not "map" { return false }
+    if st.Effect is not "Deny" { return false }
+    if st.Condition is null { return false }
+    if type(st.Condition) is not "map" { return false }
+
+    # Check Bool
+    has_bool = false
+    if st.Condition.Bool is not null and type(st.Condition.Bool) is "map" {
+        v = st.Condition.Bool["aws:SecureTransport"]
+        if v is "false" or v is false { has_bool = true }
+    }
+
+    # Check BoolIfExists
+    has_bie = false
+    if st.Condition.BoolIfExists is not null and type(st.Condition.BoolIfExists) is "map" {
+        v2 = st.Condition.BoolIfExists["aws:SecureTransport"]
+        if v2 is "false" or v2 is false { has_bie = true }
+    }
+
+    return has_bool or has_bie
+}
+
+# Does the policy doc include ANY statement that enforces HTTPS?
+has_https_enforcement = func(policy_doc) {
+    stmts = normalize_statements(policy_doc)
+    return any stmts as _, st { statement_enforces_https(st) }
+}
+
+# --------------------------- Collect ---------------------------------------
+
 resource_changes = tfplan.resource_changes else []
 
 buckets = filter resource_changes as _, rc {
@@ -57,6 +60,8 @@ buckets = filter resource_changes as _, rc {
 if buckets is undefined {
     append(violations, "tfplan.resource_changes undefined")
 }
+
+# --------------------------- Evaluate --------------------------------------
 
 for buckets as _, b {
     bucket_name = b.change.after.bucket
@@ -78,15 +83,14 @@ for buckets as _, b {
         continue
     }
 
+    ok = true
     policy_doc = null
-    valid_parse = true
     try {
         policy_doc = json.unmarshal(policy_str)
     } catch {
-        valid_parse = false
+        ok = false
     }
-
-    if not valid_parse {
+    if not ok {
         append(violations, sprintf("%s: invalid JSON policy", b.address))
         continue
     }
@@ -96,9 +100,8 @@ for buckets as _, b {
     }
 }
 
-# ---------------------------------------------------------------------------
-# Decision and output
-# ---------------------------------------------------------------------------
+# --------------------------- Decision --------------------------------------
+
 main = rule { length(violations) == 0 }
 
 if length(violations) > 0 {
