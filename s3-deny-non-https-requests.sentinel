@@ -1,6 +1,7 @@
 import "tfplan/v2" as tfplan
 import "json" as json
 import "types" as types
+import "strings" as strings
 
 # Define a collection of all S3 bucket policies in the plan that are being created or updated
 s3_bucket_policies = filter tfplan.resource_changes as _, rc {
@@ -10,7 +11,7 @@ s3_bucket_policies = filter tfplan.resource_changes as _, rc {
 
 # Find all policies that *do not* enforce HTTPS
 violating_policies = []
-for s3_bucket_policy as p[] {
+for s3_bucket_policies as p[] {
   # Safely handle cases where the policy attribute might be undefined (e.g., during a destroy or computed)
   if types.type_of(p.change.after.policy) is "undefined" {
     continue
@@ -47,5 +48,5 @@ for s3_bucket_policy as p[] {
 main = rule {
   length(violating_policies) is 0
 } {
-  "The following S3 bucket policies do not enforce SSL/HTTPS requests: #{join(", ", violating_policies)}"
+  "The following S3 bucket policies do not enforce SSL/HTTPS requests: #{strings.join(violating_policies, ', ')}"
 }
