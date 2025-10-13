@@ -1,114 +1,126 @@
 # CIS_S3_Enforce_SecureTransport.sentinel
-# Enforce HTTPS-only access for every aws_s3_bucket in the plan (safe-fail).
+# Enforce HTTPS-only access (aws:SecureTransport) for every aws_s3_bucket.
+# Safe-fail: if we can't prove HTTPS enforcement, it's a violation.
 
-import "tfplan/v2" as tfplan;
-import "json";
+import "tfplan/v2" as tfplan
+import "json"
 
-violations = [];
+violations = []
 
 # --------------------------- Helpers ---------------------------------------
 
-# Safely unmarshal JSON; returns { ok: bool, doc: any }
 safe_unmarshal = func(s) {
-    ok = false;
-    doc = null;
-    try {
-        doc = json.unmarshal(s);
-        ok = true;
-    } catch {
-        ok = false;
-    };
-    return {"ok": ok, "doc": doc};
-};
+  ok = false
+  doc = null
+  try {
+    doc = json.unmarshal(s)
+    ok = true
+  } catch {
+    ok = false
+  }
+  return {"ok": ok, "doc": doc}
+}
 
-# Normalize policy.Statement to a list
 normalize_statements = func(doc) {
-    if type(doc) is not "map" or doc.Statement is undefined { return []; };
-    stmts = doc.Statement;
-    if type(stmts) is "map" { return [stmts]; };
-    if type(stmts) is "list" { return stmts; };
-    return [];
-};
+  out = []
+  if type(doc) is "map" and doc.Statement is not undefined {
+    if type(doc.Statement) is "map" {
+      append(out, doc.Statement)
+    } else if type(doc.Statement) is "list" {
+      out = doc.Statement
+    }
+  }
+  return out
+}
 
-# Does a single statement enforce Deny when aws:SecureTransport == false?
 statement_enforces_https = func(st) {
-    if type(st) is not "map" { return false; };
-    if st.Effect is not "Deny" { return false; };
-    if st.Condition is null { return false; };
-    if type(st.Condition) is not "map" { return false; };
+  if type(st) is not "map" { return false }
+  if st.Effect is not "Deny" { return false }
+  if st.Condition is null { return false }
+  if type(st.Condition) is not "map" { return false }
 
-    has_bool = false;
-    if st.Condition.Bool is not null and type(st.Condition.Bool) is "map" {
-        v = st.Condition.Bool["aws:SecureTransport"];
-        if v is "false" or v is false { has_bool = true; };
-    };
+  # Bool check
+  has_bool = false
+  if st.Condition.Bool is not null and type(st.Condition.Bool) is "map" {
+    v = st.Condition.Bool["aws:SecureTransport"]
+    if v is "false" or v is false { has_bool = true }
+  }
 
-    has_bie = false;
-    if st.Condition.BoolIfExists is not null and type(st.Condition.BoolIfExists) is "map" {
-        v2 = st.Condition.BoolIfExists["aws:SecureTransport"];
-        if v2 is "false" or v2 is false { has_bie = true; };
-    };
+  # BoolIfExists check
+  has_bie = false
+  if st.Condition.BoolIfExists is not null and type(st.Condition.BoolIfExists) is "map" {
+    v2 = st.Condition.BoolIfExists["aws:SecureTransport"]
+    if v2 is "false" or v2 is false { has_bie = true }
+  }
 
-    return has_bool or has_bie;
-};
+  return has_bool or has_bie
+}
 
-# Does the policy doc include ANY statement that enforces HTTPS?
 has_https_enforcement = func(policy_doc) {
-    stmts = normalize_statements(policy_doc);
-    return any stmts as _, st { statement_enforces_https(st) };
-};
+  stmts = normalize_statements(policy_doc)
+  any_ok = false
+  for stmts as _, st {
+    if statement_enforces_https(st) {
+      any_ok = true
+    }
+  }
+  return any_ok
+}
 
 # --------------------------- Collect ---------------------------------------
 
-resource_changes = tfplan.resource_changes else [];
+resource_changes = tfplan.resource_changes else []
 
-buckets = filter resource_changes as _, rc {
-    rc.type is "aws_s3_bucket" and
-    rc.change.after is not null and
-    rc.change.after.bucket is not null
-} else [];
+buckets = []
+for resource_changes as _, rc {
+  if rc.type is "aws_s3_bucket" and rc.change.after is not null and rc.change.after.bucket is not null {
+    append(buckets, rc)
+  }
+}
 
 if buckets is undefined {
-    append(violations, "tfplan.resource_changes undefined");
-};
+  append(violations, "tfplan.resource_changes undefined")
+}
 
 # --------------------------- Evaluate --------------------------------------
 
 for buckets as _, b {
-    bucket_name = b.change.after.bucket;
+  bucket_name = b.change.after.bucket
 
-    policies = filter resource_changes as _, rc {
-        rc.type is "aws_s3_bucket_policy" and
-        rc.change.after is not null and
-        rc.change.after.bucket is bucket_name
-    } else [];
+  # find matching bucket policy
+  policies = []
+  for resource_changes as _, rc {
+    if rc.type is "aws_s3_bucket_policy" and rc.change.after is not null and rc.change.after.bucket is bucket_name {
+      append(policies, rc)
+    }
+  }
 
-    if length(policies) == 0 {
-        append(violations, sprintf("%s: missing bucket policy", b.address));
-        continue;
-    };
+  if length(policies) == 0 {
+    append(violations, sprintf("%s: missing bucket policy", b.address))
+    continue
+  }
 
-    policy_str = policies[0].change.after.policy;
-    if policy_str is null {
-        append(violations, sprintf("%s: bucket policy is null", b.address));
-        continue;
-    };
+  policy_str = policies[0].change.after.policy
+  if policy_str is null {
+    append(violations, sprintf("%s: bucket policy is null", b.address))
+    continue
+  }
 
-    parsed = safe_unmarshal(policy_str);
-    if not parsed.ok {
-        append(violations, sprintf("%s: invalid JSON policy", b.address));
-        continue;
-    };
+  parsed = safe_unmarshal(policy_str)
+  if not parsed.ok {
+    append(violations, sprintf("%s: invalid JSON policy", b.address))
+    continue
+  }
 
-    if not has_https_enforcement(parsed.doc) {
-        append(violations, sprintf("%s: missing aws:SecureTransport deny rule", b.address));
-    };
-};
+  if not has_https_enforcement(parsed.doc) {
+    append(violations, sprintf("%s: missing aws:SecureTransport deny rule", b.address))
+  }
+}
 
 # --------------------------- Decision --------------------------------------
 
-main = rule { length(violations) == 0 };
+main = rule { length(violations) == 0 }
 
 if length(violations) > 0 {
-    print("S3 HTTPS enforcement violations (safe-fail):", violations);
+  print("S3 HTTPS enforcement violations (safe-fail):", violations)
 }
