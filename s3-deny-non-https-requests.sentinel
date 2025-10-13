@@ -1,109 +1,51 @@
-# Enforce HTTPS-only access for S3: require a Deny on aws:SecureTransport == false
-# Safe-fail: if we can't prove HTTPS enforcement, it's a violation.
-
 import "tfplan/v2" as tfplan
-import "json"
+import "json" as json
+import "types" as types
 
-violations = []
-
-# ---------- helpers ----------
-
-# safe JSON unmarshal -> (ok, doc)
-safe_unmarshal = func(s) {
-  ok = false
-  doc = null
-  try { doc = json.unmarshal(s); ok = true } catch { ok = false }
-  return ok, doc
+# Define a collection of all S3 bucket policies in the plan that are being created or updated
+s3_bucket_policies = filter tfplan.resource_changes as _, rc {
+  rc.type is "aws_s3_bucket_policy" and
+  (rc.change.actions contains "create" or rc.change.actions contains "update")
 }
 
-# normalize Statement to a list (never undefined)
-statements_of = func(doc) {
-  if type(doc) is not "map" { return [] }
-  if doc.Statement is undefined { return [] }
-  if type(doc.Statement) is "map"  { return [doc.Statement] }
-  if type(doc.Statement) is "list" { return doc.Statement }
-  return []
-}
-
-# Does a single statement enforce HTTPS?
-statement_enforces_https = func(st) {
-  if type(st) is not "map" { return false }
-  if st.Effect is not "Deny" { return false }
-  if st.Condition is null or type(st.Condition) is not "map" { return false }
-
-  # read Bool aws:SecureTransport safely
-  has_bool = false
-  if st.Condition.Bool is not null and type(st.Condition.Bool) is "map" {
-    v = st.Condition.Bool["aws:SecureTransport"] else null
-    if v is false or v is "false" { has_bool = true }
-  }
-
-  # read BoolIfExists aws:SecureTransport safely
-  has_bie = false
-  if st.Condition.BoolIfExists is not null and type(st.Condition.BoolIfExists) is "map" {
-    v2 = st.Condition.BoolIfExists["aws:SecureTransport"] else null
-    if v2 is false or v2 is "false" { has_bie = true }
-  }
-
-  return has_bool or has_bie
-}
-
-# ---------- collect ----------
-
-rcs = tfplan.resource_changes else []
-
-# collect bucket policies in plan (create/update) safely
-policies = []
-for rcs as _, rc {
-  if rc.type is "aws_s3_bucket_policy" and rc.change.after is not null {
-    # (optional) restrict to create/update: skip deletes where policy may be absent
-    if rc.change.actions is not null and (rc.change.actions contains "create" or rc.change.actions contains "update") {
-      append(policies, rc)
-    } else if rc.change.actions is null {
-      # if actions missing, include to be conservative
-      append(policies, rc)
-    }
-  }
-}
-
-# ---------- evaluate ----------
-
-for policies as _, p {
-  # policy text must exist
-  if p.change.after.policy is undefined or p.change.after.policy is null {
-    append(violations, sprintf("%s: bucket policy missing/null", p.address))
+# Find all policies that *do not* enforce HTTPS
+violating_policies = []
+for s3_bucket_policy as p[] {
+  # Safely handle cases where the policy attribute might be undefined (e.g., during a destroy or computed)
+  if types.type_of(p.change.after.policy) is "undefined" {
     continue
   }
 
-  ok, doc = safe_unmarshal(p.change.after.policy)
-  if not ok {
-    append(violations, sprintf("%s: invalid JSON policy", p.address))
+  policy_doc = json.unmarshal(p.change.after.policy)
+
+  # Policies must contain at least one statement
+  if length(policy_doc.Statement else []) is 0 {
+    append(violating_policies, p.address)
     continue
   }
 
-  stmts = statements_of(doc)
-  if length(stmts) == 0 {
-    append(violations, sprintf("%s: policy has no statements", p.address))
-    continue
-  }
+  # Assume a violation exists until a valid "deny" statement is found
+  has_secure_transport_deny = false
 
-  enforced = false
-  for stmts as _, st {
-    if statement_enforces_https(st) {
-      enforced = true
+  # Check if a Deny statement with the SecureTransport condition exists
+  for policy_doc.Statement as statement {
+    # Safely check for the "deny" attribute using "else"
+    if (statement.Effect else "") is "Deny" and
+       ((statement.Condition else {}).Bool["aws:SecureTransport"] else null) is "false" {
+      has_secure_transport_deny = true
       break
     }
   }
 
-  if not enforced {
-    append(violations, sprintf("%s: missing Deny on aws:SecureTransport == false", p.address))
+  # If no such statement is found, it's a violation
+  if not has_secure_transport_deny {
+    append(violating_policies, p.address)
   }
 }
 
-# ---------- decision/output ----------
-
-main = rule { length(violations) == 0 }
-
-if length(violations) > 0 {
-  print("S3 HTTPS enforcement violations (safe-fail):", violations)
+# The main rule fails if any violating policies were found
+main = rule {
+  length(violating_policies) is 0
+} {
+  "The following S3 bucket policies do not enforce SSL/HTTPS requests: #{join(", ", violating_policies)}"
 }
