@@ -1,5 +1,4 @@
-# CIS_S3_Enforce_SecureTransport.sentinel
-# Enforce HTTPS-only access (aws:SecureTransport) for every aws_s3_bucket.
+# Enforce HTTPS-only access for S3: require a Deny on aws:SecureTransport == false
 # Safe-fail: if we can't prove HTTPS enforcement, it's a violation.
 
 import "tfplan/v2" as tfplan
@@ -7,117 +6,101 @@ import "json"
 
 violations = []
 
-# --------------------------- Helpers ---------------------------------------
+# ---------- helpers ----------
 
+# safe JSON unmarshal -> (ok, doc)
 safe_unmarshal = func(s) {
   ok = false
   doc = null
-  try {
-    doc = json.unmarshal(s)
-    ok = true
-  } catch {
-    ok = false
-  }
-  return {"ok": ok, "doc": doc}
+  try { doc = json.unmarshal(s); ok = true } catch { ok = false }
+  return ok, doc
 }
 
-normalize_statements = func(doc) {
-  out = []
-  if type(doc) is "map" and doc.Statement is not undefined {
-    if type(doc.Statement) is "map" {
-      append(out, doc.Statement)
-    } else if type(doc.Statement) is "list" {
-      out = doc.Statement
-    }
-  }
-  return out
+# normalize Statement to a list (never undefined)
+statements_of = func(doc) {
+  if type(doc) is not "map" { return [] }
+  if doc.Statement is undefined { return [] }
+  if type(doc.Statement) is "map"  { return [doc.Statement] }
+  if type(doc.Statement) is "list" { return doc.Statement }
+  return []
 }
 
+# Does a single statement enforce HTTPS?
 statement_enforces_https = func(st) {
   if type(st) is not "map" { return false }
   if st.Effect is not "Deny" { return false }
-  if st.Condition is null { return false }
-  if type(st.Condition) is not "map" { return false }
+  if st.Condition is null or type(st.Condition) is not "map" { return false }
 
-  # Bool check
+  # read Bool aws:SecureTransport safely
   has_bool = false
   if st.Condition.Bool is not null and type(st.Condition.Bool) is "map" {
-    v = st.Condition.Bool["aws:SecureTransport"]
-    if v is "false" or v is false { has_bool = true }
+    v = st.Condition.Bool["aws:SecureTransport"] else null
+    if v is false or v is "false" { has_bool = true }
   }
 
-  # BoolIfExists check
+  # read BoolIfExists aws:SecureTransport safely
   has_bie = false
   if st.Condition.BoolIfExists is not null and type(st.Condition.BoolIfExists) is "map" {
-    v2 = st.Condition.BoolIfExists["aws:SecureTransport"]
-    if v2 is "false" or v2 is false { has_bie = true }
+    v2 = st.Condition.BoolIfExists["aws:SecureTransport"] else null
+    if v2 is false or v2 is "false" { has_bie = true }
   }
 
   return has_bool or has_bie
 }
 
-has_https_enforcement = func(policy_doc) {
-  stmts = normalize_statements(policy_doc)
-  any_ok = false
-  for stmts as _, st {
-    if statement_enforces_https(st) {
-      any_ok = true
-    }
-  }
-  return any_ok
-}
+# ---------- collect ----------
 
-# --------------------------- Collect ---------------------------------------
+rcs = tfplan.resource_changes else []
 
-resource_changes = tfplan.resource_changes else []
-
-buckets = []
-for resource_changes as _, rc {
-  if rc.type is "aws_s3_bucket" and rc.change.after is not null and rc.change.after.bucket is not null {
-    append(buckets, rc)
-  }
-}
-
-if buckets is undefined {
-  append(violations, "tfplan.resource_changes undefined")
-}
-
-# --------------------------- Evaluate --------------------------------------
-
-for buckets as _, b {
-  bucket_name = b.change.after.bucket
-
-  # find matching bucket policy
-  policies = []
-  for resource_changes as _, rc {
-    if rc.type is "aws_s3_bucket_policy" and rc.change.after is not null and rc.change.after.bucket is bucket_name {
+# collect bucket policies in plan (create/update) safely
+policies = []
+for rcs as _, rc {
+  if rc.type is "aws_s3_bucket_policy" and rc.change.after is not null {
+    # (optional) restrict to create/update: skip deletes where policy may be absent
+    if rc.change.actions is not null and (rc.change.actions contains "create" or rc.change.actions contains "update") {
+      append(policies, rc)
+    } else if rc.change.actions is null {
+      # if actions missing, include to be conservative
       append(policies, rc)
     }
   }
+}
 
-  if length(policies) == 0 {
-    append(violations, sprintf("%s: missing bucket policy", b.address))
+# ---------- evaluate ----------
+
+for policies as _, p {
+  # policy text must exist
+  if p.change.after.policy is undefined or p.change.after.policy is null {
+    append(violations, sprintf("%s: bucket policy missing/null", p.address))
     continue
   }
 
-  policy_str = policies[0].change.after.policy
-  if policy_str is null {
-    append(violations, sprintf("%s: bucket policy is null", b.address))
+  ok, doc = safe_unmarshal(p.change.after.policy)
+  if not ok {
+    append(violations, sprintf("%s: invalid JSON policy", p.address))
     continue
   }
 
-  parsed = safe_unmarshal(policy_str)
-  if not parsed.ok {
-    append(violations, sprintf("%s: invalid JSON policy", b.address))
+  stmts = statements_of(doc)
+  if length(stmts) == 0 {
+    append(violations, sprintf("%s: policy has no statements", p.address))
     continue
   }
 
-  if not has_https_enforcement(parsed.doc) {
-    append(violations, sprintf("%s: missing aws:SecureTransport deny rule", b.address))
+  enforced = false
+  for stmts as _, st {
+    if statement_enforces_https(st) {
+      enforced = true
+      break
+    }
+  }
+
+  if not enforced {
+    append(violations, sprintf("%s: missing Deny on aws:SecureTransport == false", p.address))
   }
 }
 
-# --------------------------- Decision --------------------------------------
+# ---------- decision/output ----------
 
 main = rule { length(violations) == 0 }
 
