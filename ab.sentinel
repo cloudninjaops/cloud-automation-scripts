@@ -1,17 +1,29 @@
-import "tfplan/v2" as tfplan
-
-# Check all aws_s3_bucket_public_access_block resources
-public_blocks = filter tfplan.resource_changes as _, r {
-    r.type is "aws_s3_bucket_public_access_block"
-}
-
-violations = filter public_blocks as _, r {
-    r.change.after.block_public_acls is false or
-    r.change.after.ignore_public_acls is false or
-    r.change.after.block_public_policy is false or
-    r.change.after.restrict_public_buckets is false
-}
-
-main = rule {
-    length(violations) is 0
+mock "tfplan/v2" {
+  module {
+    source = "tfplan/v2.sentinelmock"
+  }
+  data = {
+    "resource_changes": [
+      {
+        "type": "aws_s3_bucket",
+        "address": "aws_s3_bucket.cloudtrail",
+        "change": {
+          "after": {
+            "tags": { "cloudtrail_logs": "true" },
+            "bucket": "my-cloudtrail-bucket"
+          }
+        }
+      },
+      {
+        "type": "aws_s3_bucket_policy",
+        "address": "aws_s3_bucket_policy.cloudtrail",
+        "change": {
+          "after": {
+            "bucket": "my-cloudtrail-bucket",
+            "policy": "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\"}]}"
+          }
+        }
+      }
+    ]
+  }
 }
