@@ -11,7 +11,7 @@ s3_bucket_policies = filter tfplan.resource_changes as _, rc {
 
 # Find all policies that *do not* enforce HTTPS
 violating_policies = []
-for s3_bucket_policies as p {
+for s3_bucket_policies as p[] {
   # Safely handle cases where the policy attribute might be undefined (e.g., during a destroy or computed)
   if types.type_of(p.change.after.policy) is "undefined" {
     continue
