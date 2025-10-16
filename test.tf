@@ -20,14 +20,17 @@ violations_accesslog = filter sse_cfgs as _, r {
 }
 
 # ---- Non-access-log buckets: must be KMS with a CMK (reject alias/aws/s3) ----
+# ---- Non-access-log buckets: must be KMS with a CMK (reject alias/aws/s3) ----
 violations_cmk = filter sse_cfgs as _, r {
   not (((r.change.after.bucket else "") contains "s3-accesslog")) and
 
-  # Violation if NONE of the rules provide aws:kms with a non-managed key
+  # Violation if NONE of the inner defaults specify aws:kms with a non-managed key
   not any ((r.change.after.rule else [])) as rr {
-    ((rr.apply_server_side_encryption_by_default.sse_algorithm else "") == "aws:kms") and
-    (length(trim((rr.apply_server_side_encryption_by_default.kms_master_key_id else ""))) > 0) and
-    not (((rr.apply_server_side_encryption_by_default.kms_master_key_id else "") contains "alias/aws/s3"))
+    any ((rr.apply_server_side_encryption_by_default else [])) as d {
+      ((d.sse_algorithm else "") == "aws:kms") and
+      (length(trim((d.kms_master_key_id else ""))) > 0) and
+      not (((d.kms_master_key_id else "") contains "alias/aws/s3"))
+    }
   }
 }
 
