@@ -48,4 +48,13 @@ for buckets as addr, bucket {
   }
 
   if versioning_enabled is false {
-    viola
+    violating = append(violating, addr + " (versioning disabled)")
+  }
+}
+
+main = rule { length(violating) is 0 }
+
+if length(violating) > 0 {
+  print("S3 buckets missing required security controls:")
+  print(violating)
+}
