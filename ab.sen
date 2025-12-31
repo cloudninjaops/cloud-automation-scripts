@@ -1,59 +1,51 @@
 import "tfplan/v2" as tfplan
 
-violating_resources = []
+violating = []
 
-s3_buckets = filter tfplan.resource_changes as address, rc {
+buckets = filter tfplan.resource_changes as addr, rc {
   rc.type is "aws_s3_bucket" and
   (rc.change.actions contains "create" or rc.change.actions contains "update")
 }
 
-for s3_buckets as bucket_addr, bucket_rc {
+for buckets as addr, bucket {
 
-  bucket_name = bucket_rc.change.after.bucket else bucket_rc.change.after.id else ""
+  bucket_name = bucket.change.after.bucket else bucket.change.after.id else ""
 
-  # ---- Logging resource exists? ----
-  log_cfg = filter tfplan.resource_changes as a, rc {
+  # ---------- Logging ----------
+  logging_cfg = filter tfplan.resource_changes as a, rc {
     rc.type is "aws_s3_bucket_logging" and
-    (rc.change.actions contains "create" or rc.change.actions contains "update") and
-    (rc.change.after.bucket is bucket_name or rc.change.after.bucket is bucket_addr)
+    rc.change.after.bucket is bucket_name
   }
 
-  has_logging = (log_cfg is not undefined) and (length(log_cfg) > 0)
+  has_logging = false
+  if logging_cfg is not undefined and length(logging_cfg) > 0 {
+    has_logging = true
+  }
+
   if has_logging is false {
-    violating_resources = append(violating_resources, bucket_addr + " (logging not configured)")
+    violating = append(violating, addr + " (logging disabled)")
   }
 
-  # ---- Versioning enabled? ----
-  ver_cfg = filter tfplan.resource_changes as a, rc {
+  # ---------- Versioning ----------
+  versioning_cfg = filter tfplan.resource_changes as a, rc {
     rc.type is "aws_s3_bucket_versioning" and
-    (rc.change.actions contains "create" or rc.change.actions contains "update") and
-    (rc.change.after.bucket is bucket_name or rc.change.after.bucket is bucket_addr)
+    rc.change.after.bucket is bucket_name
   }
 
   versioning_enabled = false
-  if (ver_cfg is not undefined) and (length(ver_cfg) > 0) {
-    after = ver_cfg[0].change.after
+  if versioning_cfg is not undefined and length(versioning_cfg) > 0 {
+    after = versioning_cfg[0].change.after
 
-    if after.versioning_configuration is not undefined and length(after.versioning_configuration) > 0 {
-      vc = after.versioning_configuration[0]
-      if vc.status is not undefined and vc.status is "Enabled" {
-        versioning_enabled = true
-      }
+    if after.versioning_configuration is not undefined and
+       length(after.versioning_configuration) > 0 and
+       after.versioning_configuration[0].status is "Enabled" {
+      versioning_enabled = true
     }
 
-    if after.status is not undefined and after.status is "Enabled" {
+    if after.status is "Enabled" {
       versioning_enabled = true
     }
   }
 
   if versioning_enabled is false {
-    violating_resources = append(violating_resources, bucket_addr + " (versioning not enabled)")
-  }
-}
-
-main = rule { length(violating_resources) is 0 }
-
-if length(violating_resources) > 0 {
-  print("S3 buckets missing required security features:")
-  print(violating_resources)
-}
+    viola
