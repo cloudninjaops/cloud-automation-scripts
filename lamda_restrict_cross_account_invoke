@@ -1,0 +1,81 @@
+import "tfplan/v2" as tfplan
+import "types"
+import "strings"
+import "regex"
+
+func is_null(v) { return types.type_of(v) is "null" }
+func is_string(v) { return types.type_of(v) is "string" }
+func is_map(v) { return types.type_of(v) is "map" }
+
+func mget(m, k) {
+  if !is_map(m) { return null }
+  if m contains k { return m[k] }
+  return null
+}
+
+func trim(v) {
+  if is_string(v) { return strings.trim_space(v) }
+  return ""
+}
+
+# ---- EDIT THIS ALLOWLIST ----
+trusted_account_ids = [
+  # "123456789012",
+  # "111122223333",
+]
+
+# Matches arn:aws:iam::123456789012:root
+re_root_arn = regex.compile("^arn:aws:iam::[0-9]{12}:root$")
+
+func extract_account_id_from_root_arn(arn) {
+  # arn:aws:iam::123456789012:root
+  # Split by ":" => index 4 is account id in AWS IAM ARNs
+  parts = strings.split(arn, ":")
+  if length(parts) >= 5 { return parts[4] }
+  return ""
+}
+
+func is_trusted_account(acct) {
+  for trusted_account_ids as t {
+    if acct == t { return true }
+  }
+  return false
+}
+
+perms = tfplan.resource_changes["aws_lambda_permission"] else {}
+violations = []
+
+for perms as addr, rc {
+  after = rc.change.after else null
+  if is_null(after) { continue }
+
+  principal = trim(mget(after, "principal"))
+  if !is_string(principal) or principal == "" { continue }
+
+  # Public is handled by the public policy; skip "*" here
+  if principal == "*" { continue }
+
+  # If principal is another AWS account root ARN, enforce allowlist
+  if regex.match(re_root_arn, principal) {
+    acct = extract_account_id_from_root_arn(principal)
+
+    if acct == "" {
+      violations = append(violations, {
+        "resource": addr,
+        "reason": "Cross-account principal root ARN detected but account id could not be parsed: " + principal,
+      })
+      continue
+    }
+
+    if !is_trusted_account(acct) {
+      violations = append(violations, {
+        "resource": addr,
+        "reason": "Untrusted cross-account Lambda invoke permission detected. Principal account not allowlisted: " + acct,
+      })
+    }
+  }
+}
+
+main = rule {
+  length(violations) is 0
+}
