@@ -1,137 +1,75 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # ------------------------------------------------------------
-# Terraform external data source helper:
-# - Reads JSON from stdin (jq)
-# - Assumes role into target account
-# - Imports cert into ACM
-# - Returns {"arn": "..."} to Terraform
-#
-# FIX INCLUDED:
-#   Handles "certificate field contains more than one certificate"
-#   by ensuring:
-#     --certificate       = ONLY leaf cert (1 PEM block)
-#     --certificate-chain = intermediate chain (0+ PEM blocks)
+# TOP PART: Read Terraform external input safely (handles:
+#  - normal JSON object
+#  - JSON object wrapped as a string (escaped)
+#  - tags passed as JSON string; decodes to object
 # ------------------------------------------------------------
 
-# 1) Read input from Terraform stdin
-eval "$(
-  jq -r '@sh "ACCOUNT_ID=\(.aws_account_id) REGION=\(.region) CERT_BODY=\(.cert_body) PRIV_KEY=\(.priv_key) CERT_CHAIN=\(.cert_chain) TAGS_JSON=\(.tags)"'
-)"
+# 1) Read raw stdin from Terraform
+INPUT_RAW="$(cat)"
 
-ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/Fepoc-All-Terraform-Role"
-SESSION_NAME="ACMImportSession"
+# 2) Decode stdin if it is a JSON string (can be double-encoded)
+INPUT_JSON="$INPUT_RAW"
+while echo "$INPUT_JSON" | jq -e 'type=="string"' >/dev/null 2>&1; do
+  INPUT_JSON="$(echo "$INPUT_JSON" | jq -r '.')"
+done
 
-# 2) Assume the role
-TEMP_CREDS="$(
-  aws sts assume-role \
-    --role-arn "$ROLE_ARN" \
-    --role-session-name "$SESSION_NAME" \
-    --query "Credentials" \
-    --output json \
-    --region "$REGION"
-)"
+# 3) Ensure we ended up with a JSON object
+if ! echo "$INPUT_JSON" | jq -e 'type=="object"' >/dev/null 2>&1; then
+  echo "ERROR: Terraform input is not a JSON object after decoding." >&2
+  echo "DEBUG: INPUT_RAW:  $INPUT_RAW" >&2
+  echo "DEBUG: INPUT_JSON: $INPUT_JSON" >&2
+  exit 5
+fi
 
-export AWS_ACCESS_KEY_ID
-export AWS_SECRET_ACCESS_KEY
-export AWS_SESSION_TOKEN
+# 4) Extract required fields
+ACCOUNT_ID="$(echo "$INPUT_JSON" | jq -r '.aws_account_id // empty')"
+REGION="$(echo "$INPUT_JSON" | jq -r '.region // empty')"
+CERT_BODY="$(echo "$INPUT_JSON" | jq -r '.cert_body // empty')"
+PRIV_KEY="$(echo "$INPUT_JSON" | jq -r '.priv_key // empty')"
+CERT_CHAIN="$(echo "$INPUT_JSON" | jq -r '.cert_chain // ""')"
 
-AWS_ACCESS_KEY_ID="$(echo "$TEMP_CREDS" | jq -r '.AccessKeyId')"
-AWS_SECRET_ACCESS_KEY="$(echo "$TEMP_CREDS" | jq -r '.SecretAccessKey')"
-AWS_SESSION_TOKEN="$(echo "$TEMP_CREDS" | jq -r '.SessionToken')"
+# tags is typically passed as a STRING (because external query values are strings)
+# so read it as raw string; default to "{}"
+TAGS_JSON="$(echo "$INPUT_JSON" | jq -r '.tags // "{}"')"
 
-# 3) Format tags for AWS CLI (Key=string,Value=string)
-# Terraform typically passes tags as JSON object: {"k1":"v1","k2":"v2"}
+# 5) Basic validation
+if [ -z "$ACCOUNT_ID" ] || [ -z "$REGION" ]; then
+  echo "ERROR: Missing aws_account_id or region in input JSON" >&2
+  echo "DEBUG: INPUT_JSON: $INPUT_JSON" >&2
+  exit 5
+fi
+
+# 6) Normalize TAGS_JSON -> TAGS_NORM (must be a JSON object)
+# TAGS_JSON might be:
+#  - {"k":"v"}                 (object text)
+#  - "{\"k\":\"v\"}"           (escaped)
+#  - "{"k":"v"}"               (quoted)
+TAGS_NORM="$TAGS_JSON"
+
+# If it's quoted JSON, decode until it's not a string
+while echo "$TAGS_NORM" | jq -e 'type=="string"' >/dev/null 2>&1; do
+  TAGS_NORM="$(echo "$TAGS_NORM" | jq -r '.')"
+done
+
+# Validate it's an object; else default to empty object
+if ! echo "$TAGS_NORM" | jq -e 'type=="object"' >/dev/null 2>&1; then
+  echo "WARN: tags is not a JSON object after decode. Defaulting to {}." >&2
+  echo "DEBUG: TAGS_JSON: $TAGS_JSON" >&2
+  TAGS_NORM='{}'
+fi
+
+# 7) Convert tags to AWS CLI format (force values to string)
 FORMATTED_TAGS="$(
-  echo "${TAGS_JSON:-{}}" | jq -r 'to_entries | map("Key=\(.key),Value=\(.value)") | join(" ")'
+  echo "$TAGS_NORM" | jq -r '
+    to_entries
+    | map(select(.value != null))
+    | map("Key=\(.key),Value=\(.value|tostring)")
+    | join(" ")
+  '
 )"
 
-# -------------------------------
-# 4) FIX: ensure leaf vs chain
-# -------------------------------
-
-# Normalize CRLF to LF (sometimes cert material has \r\n)
-CERT_BODY="$(printf "%s\n" "${CERT_BODY:-}" | sed 's/\r$//')"
-PRIV_KEY="$(printf "%s\n" "${PRIV_KEY:-}"  | sed 's/\r$//')"
-CERT_CHAIN="$(printf "%s\n" "${CERT_CHAIN:-}" | sed 's/\r$//')"
-
-CERT_COUNT="$(printf "%s\n" "$CERT_BODY" | grep -c "BEGIN CERTIFICATE" || true)"
-
-if [ "${CERT_COUNT}" -gt 1 ]; then
-  echo "INFO: CERT_BODY contains ${CERT_COUNT} certificates. Splitting leaf vs chain..." 1>&2
-
-  # First PEM block = leaf cert
-  LEAF_CERT="$(printf "%s\n" "$CERT_BODY" | awk '
-    BEGIN{c=0}
-    /BEGIN CERTIFICATE/{c++}
-    { if(c==1) print }
-    /END CERTIFICATE/{ if(c==1) exit }
-  ')"
-
-  # Remaining PEM blocks = extra chain
-  REST_CERTS="$(printf "%s\n" "$CERT_BODY" | awk '
-    BEGIN{c=0;out=0}
-    /BEGIN CERTIFICATE/{c++; if(c>=2) out=1}
-    { if(out) print }
-  ')"
-
-  CERT_BODY="$LEAF_CERT"
-
-  # If CERT_CHAIN is empty, populate it from REST_CERTS.
-  # If CERT_CHAIN is already provided, keep it to avoid duplicates.
-  if [ -z "${CERT_CHAIN}" ] && [ -n "${REST_CERTS}" ]; then
-    CERT_CHAIN="$REST_CERTS"
-  fi
-fi
-
-# Write to temp files (more reliable than passing multiline strings)
-CERT_FILE="$(mktemp)"
-KEY_FILE="$(mktemp)"
-CHAIN_FILE="$(mktemp)"
-
-cleanup() {
-  rm -f "$CERT_FILE" "$KEY_FILE" "$CHAIN_FILE"
-}
-trap cleanup EXIT
-
-printf "%s\n" "$CERT_BODY" > "$CERT_FILE"
-printf "%s\n" "$PRIV_KEY"  > "$KEY_FILE"
-printf "%s\n" "$CERT_CHAIN" > "$CHAIN_FILE"
-
-# Optional sanity logs (to stderr so Terraform doesn't treat as JSON output)
-echo "INFO: leaf cert blocks:  $(grep -c 'BEGIN CERTIFICATE' "$CERT_FILE" 2>/dev/null || true)" 1>&2
-echo "INFO: chain cert blocks: $(grep -c 'BEGIN CERTIFICATE' "$CHAIN_FILE" 2>/dev/null || true)" 1>&2
-
-# 5) Import certificate
-# Only pass --certificate-chain if chain file is non-empty
-if [ -s "$CHAIN_FILE" ]; then
-  CERT_ARN="$(
-    aws acm import-certificate \
-      --certificate fileb://"$CERT_FILE" \
-      --private-key fileb://"$KEY_FILE" \
-      --certificate-chain fileb://"$CHAIN_FILE" \
-      --tags $FORMATTED_TAGS \
-      --region "$REGION" \
-      --query 'CertificateArn' \
-      --output text
-  )"
-else
-  CERT_ARN="$(
-    aws acm import-certificate \
-      --certificate fileb://"$CERT_FILE" \
-      --private-key fileb://"$KEY_FILE" \
-      --tags $FORMATTED_TAGS \
-      --region "$REGION" \
-      --query 'CertificateArn' \
-      --output text
-  )"
-fi
-
-# 6) Unset temporary credentials
-unset AWS_ACCESS_KEY_ID
-unset AWS_SECRET_ACCESS_KEY
-unset AWS_SESSION_TOKEN
-
-# 7) Output JSON for Terraform external data source
-jq -n --arg arn "$CERT_ARN" '{"arn":$arn}'
+# ---- From here continue with ROLE_ARN, assume-role, leaf/chain split, import, etc. ----
