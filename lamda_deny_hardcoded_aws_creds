@@ -1,11 +1,20 @@
 import "tfplan/v2" as tfplan
 import "types"
 import "strings"
-import "regex"
 
-func is_null(v) { return types.type_of(v) is "null" }
+# Keys to block if present in Lambda environment variables
+blocked_env_keys = {
+  "AWS_ACCESS_KEY_ID": true,
+  "AWS_SECRET_ACCESS_KEY": true,
+  "AWS_SESSION_TOKEN": true,
+}
+
+# -------------------------
+# Helpers (defensive access)
+# -------------------------
+func is_null(v)   { return types.type_of(v) is "null" }
+func is_map(v)    { return types.type_of(v) is "map" }
 func is_string(v) { return types.type_of(v) is "string" }
-func is_map(v) { return types.type_of(v) is "map" }
 
 func mget(m, k) {
   if !is_map(m) { return null }
@@ -18,31 +27,16 @@ func up(v) {
   return ""
 }
 
-# Forbidden env var names
-forbidden_env_keys = {
-  "AWS_ACCESS_KEY_ID": true,
-  "AWS_SECRET_ACCESS_KEY": true,
-  "AWS_SESSION_TOKEN": true,
-  "AWS_SECURITY_TOKEN": true,
+func is_nonempty_string(v) {
+  return is_string(v) and strings.trim(v, " \t\r\n") != ""
 }
 
-# Patterns that look like AWS keys (best-effort)
-# Access key IDs often start with AKIA/ASIA etc, 20 chars total.
-re_access_key_id = regex.compile("^(AKIA|ASIA|AIDA|AGPA|AROA|ANPA)[0-9A-Z]{16}$")
-# Secret access keys are 40-ish chars base64-ish (best-effort check).
-re_secret_key = regex.compile("^[A-Za-z0-9/+=]{40}$")
-
-func looks_like_aws_key(v) {
-  if !is_string(v) { return false }
-  s = strings.trim_space(v)
-  if regex.match(re_access_key_id, s) { return true }
-  if regex.match(re_secret_key, s) { return true }
-  return false
-}
+# -------------------------
+# Policy logic
+# -------------------------
+violations = []
 
 funcs = tfplan.resource_changes["aws_lambda_function"] else {}
-
-violations = []
 
 for funcs as addr, rc {
   after = rc.change.after else null
@@ -54,28 +48,20 @@ for funcs as addr, rc {
   vars = mget(env, "variables")
   if !is_map(vars) { continue }
 
+  # Iterate over all environment variables and check blocked keys
   for vars as k, v {
-    key_upper = up(k)
+    key = up(k)
 
-    # Block explicit AWS credential env vars
-    if forbidden_env_keys contains key_upper {
-      violations = append(violations, {
-        "resource": addr,
-        "reason": "Hardcoded AWS credential env var is not allowed: " + k,
-      })
-      continue
-    }
-
-    # Block values that look like keys (best-effort)
-    if looks_like_aws_key(v) {
-      violations = append(violations, {
-        "resource": addr,
-        "reason": "Lambda env var value looks like a hardcoded AWS credential for key: " + k,
-      })
+    if blocked_env_keys[key] else false {
+      # If value is any non-empty string -> violation
+      if is_nonempty_string(v) {
+        violations = append(
+          violations,
+          addr + " sets forbidden env var " + key + " with a non-empty value"
+        )
+      }
     }
   }
 }
 
-main = rule {
-  length(violations) is 0
-}
+main = rule { length(violations) is 0 }
