@@ -1,11 +1,33 @@
 import "tfplan/v2" as tfplan
 import "types"
 import "strings"
-import "regex"
 
-func is_null(v) { return types.type_of(v) is "null" }
+# =========================
+# CONFIG (edit as needed)
+# =========================
+
+# Allowed AWS service principals that can invoke Lambda
+allowed_service_principals = {
+  "events.amazonaws.com": true,
+  "sns.amazonaws.com": true,
+  "s3.amazonaws.com": true,
+  "logs.amazonaws.com": true,
+  "apigateway.amazonaws.com": true,
+  "cloudwatch.amazonaws.com": true,
+  "states.amazonaws.com": true,
+}
+
+# Allow specific external AWS account IDs (optional)
+allowed_external_accounts = {
+  # "123456789012": true,
+}
+
+# =========================
+# Helpers
+# =========================
+func is_null(v)   { return types.type_of(v) is "null" }
+func is_map(v)    { return types.type_of(v) is "map" }
 func is_string(v) { return types.type_of(v) is "string" }
-func is_map(v) { return types.type_of(v) is "map" }
 
 func mget(m, k) {
   if !is_map(m) { return null }
@@ -13,69 +35,75 @@ func mget(m, k) {
   return null
 }
 
-func trim(v) {
-  if is_string(v) { return strings.trim_space(v) }
+func lower(v) {
+  if is_string(v) { return strings.lower(v) }
   return ""
 }
 
-# ---- EDIT THIS ALLOWLIST ----
-trusted_account_ids = [
-  # "123456789012",
-  # "111122223333",
-]
+func is_allowed_service(principal) {
+  p = lower(principal)
+  return allowed_service_principals[p] else false
+}
 
-# Matches arn:aws:iam::123456789012:root
-re_root_arn = regex.compile("^arn:aws:iam::[0-9]{12}:root$")
+# Parse account id from ARN without regex:
+# arn:aws:iam::123456789012:role/RoleName
+func extract_account_id_from_arn(arn) {
+  if !is_string(arn) { return "" }
+  if !strings.has_prefix(arn, "arn:") { return "" }
 
-func extract_account_id_from_root_arn(arn) {
-  # arn:aws:iam::123456789012:root
-  # Split by ":" => index 4 is account id in AWS IAM ARNs
   parts = strings.split(arn, ":")
-  if length(parts) >= 5 { return parts[4] }
-  return ""
+  if length(parts) < 6 { return "" }
+
+  acct = parts[4]
+  if !is_string(acct) { return "" }
+  return acct
 }
 
-func is_trusted_account(acct) {
-  for trusted_account_ids as t {
-    if acct == t { return true }
-  }
-  return false
+func is_iam_arn(principal) {
+  if !is_string(principal) { return false }
+  return strings.has_prefix(principal, "arn:aws:iam::")
 }
+
+# =========================
+# Policy logic
+# =========================
+violations = []
 
 perms = tfplan.resource_changes["aws_lambda_permission"] else {}
-violations = []
 
 for perms as addr, rc {
   after = rc.change.after else null
   if is_null(after) { continue }
 
-  principal = trim(mget(after, "principal"))
+  principal = mget(after, "principal")
   if !is_string(principal) or principal == "" { continue }
 
-  # Public is handled by the public policy; skip "*" here
-  if principal == "*" { continue }
+  # 1) Wildcard is always denied
+  if principal == "*" {
+    violations = append(violations, addr + " uses wildcard principal (*)")
+    continue
+  }
 
-  # If principal is another AWS account root ARN, enforce allowlist
-  if regex.match(re_root_arn, principal) {
-    acct = extract_account_id_from_root_arn(principal)
+  # 2) AWS service principals: allow only from allowlist
+  if strings.contains(principal, ".amazonaws.com") {
+    if !is_allowed_service(principal) {
+      violations = append(violations, addr + " uses unapproved service principal: " + principal)
+    }
+    continue
+  }
 
-    if acct == "" {
-      violations = append(violations, {
-        "resource": addr,
-        "reason": "Cross-account principal root ARN detected but account id could not be parsed: " + principal,
-      })
+  # 3) IAM principals (ARNs): deny unless allowlisted by account ID
+  if is_iam_arn(principal) {
+    acct = extract_account_id_from_arn(principal)
+    if acct != "" and (allowed_external_accounts[acct] else false) {
       continue
     }
-
-    if !is_trusted_account(acct) {
-      violations = append(violations, {
-        "resource": addr,
-        "reason": "Untrusted cross-account Lambda invoke permission detected. Principal account not allowlisted: " + acct,
-      })
-    }
+    violations = append(violations, addr + " allows IAM principal ARN (potential cross-account): " + principal)
+    continue
   }
+
+  # 4) Anything else: deny (unknown principal format)
+  violations = append(violations, addr + " uses unsupported/unknown principal format: " + principal)
 }
 
-main = rule {
-  length(violations) is 0
-}
+main = rule { length(violations) is 0 }

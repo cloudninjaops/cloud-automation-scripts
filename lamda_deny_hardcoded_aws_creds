@@ -55,10 +55,7 @@ for funcs as addr, rc {
     if blocked_env_keys[key] else false {
       # If value is any non-empty string -> violation
       if is_nonempty_string(v) {
-        violations = append(
-          violations,
-          addr + " sets forbidden env var " + key + " with a non-empty value"
-        )
+        violations = append(violations, addr + " sets forbidden env var " + key + " with a non-empty value")
       }
     }
   }
