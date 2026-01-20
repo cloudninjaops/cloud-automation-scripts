@@ -1,12 +1,10 @@
 import "tfplan/v2" as tfplan
-import "types"
 import "strings"
 
 # =========================
 # CONFIG (edit as needed)
 # =========================
 
-# Allowed AWS service principals that can invoke Lambda
 allowed_service_principals = {
   "events.amazonaws.com": true,
   "sns.amazonaws.com": true,
@@ -17,7 +15,7 @@ allowed_service_principals = {
   "states.amazonaws.com": true,
 }
 
-# Allow specific external AWS account IDs (optional)
+# Optional external account allowlist (keep empty if not used)
 allowed_external_accounts = {
   # "123456789012": true,
 }
@@ -25,58 +23,41 @@ allowed_external_accounts = {
 # =========================
 # Helpers
 # =========================
-func is_null(v)   { return types.type_of(v) is "null" }
-func is_map(v)    { return types.type_of(v) is "map" }
-func is_string(v) { return types.type_of(v) is "string" }
 
-func mget(m, k) {
-  if !is_map(m) { return null }
-  if m contains k { return m[k] }
-  return null
+func lower(v) { return strings.lower(v) }
+
+func is_allowed_service(p) {
+  return allowed_service_principals[lower(p)] else false
 }
 
-func lower(v) {
-  if is_string(v) { return strings.lower(v) }
-  return ""
+func is_iam_arn(p) {
+  return strings.has_prefix(p, "arn:aws:iam::")
 }
 
-func is_allowed_service(principal) {
-  p = lower(principal)
-  return allowed_service_principals[p] else false
-}
-
-# Parse account id from ARN without regex:
 # arn:aws:iam::123456789012:role/RoleName
 func extract_account_id_from_arn(arn) {
-  if !is_string(arn) { return "" }
-  if !strings.has_prefix(arn, "arn:") { return "" }
-
   parts = strings.split(arn, ":")
   if length(parts) < 6 { return "" }
-
-  acct = parts[4]
-  if !is_string(acct) { return "" }
-  return acct
-}
-
-func is_iam_arn(principal) {
-  if !is_string(principal) { return false }
-  return strings.has_prefix(principal, "arn:aws:iam::")
+  return parts[4]
 }
 
 # =========================
 # Policy logic
 # =========================
+
 violations = []
 
 perms = tfplan.resource_changes["aws_lambda_permission"] else {}
 
-for perms as addr, rc {
-  after = rc.change.after else null
-  if is_null(after) { continue }
+# NOTE: using single-variable loop for maximum compatibility
+for perms as addr {
+  rc = perms[addr]
 
-  principal = mget(after, "principal")
-  if !is_string(principal) or principal == "" { continue }
+  after = rc.change.after else null
+  if after is null { continue }
+
+  principal = after.principal else ""
+  if principal == "" { continue }
 
   # 1) Wildcard is always denied
   if principal == "*" {
@@ -84,7 +65,7 @@ for perms as addr, rc {
     continue
   }
 
-  # 2) AWS service principals: allow only from allowlist
+  # 2) Service principals: allow only from allowlist
   if strings.contains(principal, ".amazonaws.com") {
     if !is_allowed_service(principal) {
       violations = append(violations, addr + " uses unapproved service principal: " + principal)
@@ -92,7 +73,7 @@ for perms as addr, rc {
     continue
   }
 
-  # 3) IAM principals (ARNs): deny unless allowlisted by account ID
+  # 3) IAM principals (ARNs): deny unless allowlisted
   if is_iam_arn(principal) {
     acct = extract_account_id_from_arn(principal)
     if acct != "" and (allowed_external_accounts[acct] else false) {
@@ -102,7 +83,7 @@ for perms as addr, rc {
     continue
   }
 
-  # 4) Anything else: deny (unknown principal format)
+  # 4) Unknown principal formats: deny
   violations = append(violations, addr + " uses unsupported/unknown principal format: " + principal)
 }
 
