@@ -1,0 +1,4 @@
+Test file 
+Sample regex pattern
+
+    "awslogs-multiline-pattern": "^\\s*(?:\\d{4}-\\d{2}-\\d{2}[T\\s]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?\\s+)?(?:\\[?(SEVERE|WARNING|INFO|DEBUG|ERROR|WARN)\\]?\\s*\\b|(?!.*\\[?(?:SEVERE|WARNING|INFO|DEBUG|ERROR|WARN)\\]?).*\\bxy-yz-zx\\b)"
