@@ -1,0 +1,53 @@
+
+
+---
+
+**Title:** Bulk Tag Update for AWS Resources Managed by Terraform Cloud
+
+---
+
+ add or update tags on all AWS resources in a Terraform Cloud workspace
+**So that** all resources are correctly labeled with the right cost center and billing code for finance reporting.
+
+---
+
+**Background**
+
+We have AWS resources managed by Terraform Cloud (Workspace A). We need to add two new tags — `costcenter` and `BillingCode` — across all resources without triggering any resource replacements or redeployments.
+
+---
+
+**What needs to happen**
+
+- A script reads the latest Terraform state file from Workspace A via the TFC API
+- It goes through every AWS resource in that state file
+- For each resource, it checks the existing tags and applies the following logic:
+  - Resource has no tags → add our 2 new tags
+  - Resource has some tags but not ours → keep existing tags and add ours
+  - Resource already has our tags with the same values → skip, do nothing
+  - Resource already has our tags but with different values → overwrite only those 2 tags, leave the rest untouched
+  - Resource type does not support tagging → skip and log it
+
+---
+
+**Supported AWS Resource Types**
+
+S3, EC2, Lambda, CloudWatch, VPC Endpoints, Load Balancers, Target Groups, Launch Templates, EFS, EBS, Security Groups, KMS, ACM, SQS, SNS, SageMaker, RDS (cluster, standalone, serverless), IAM Roles and Policies.
+
+---
+
+**Acceptance Criteria**
+
+- [ ] Script reads state file from Workspace A without triggering any Terraform plan or apply
+- [ ] No existing tags are removed or overwritten except the 2 new ones if values differ
+- [ ] Resources that don't support tagging are skipped gracefully with a log message
+- [ ] A dry-run mode is available to preview changes before applying
+- [ ] A summary is printed at the end showing how many resources were tagged, skipped, unchanged, or failed
+- [ ] No AWS resource is replaced or redeployed as a result of this change
+
+---
+
+**Out of Scope**
+
+- Updating the Terraform HCL code with new tags (this is a one-time out-of-band tag update)
+- Any changes to Workspace A's Terraform configuration
