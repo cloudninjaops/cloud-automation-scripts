@@ -1,0 +1,106 @@
+EXTRA_RESOURCES = '{"arns":["arn:aws:sqs:...","arn:aws:rds:..."],"instance_ids":["i-0abc","sg-0abc"],"s3_buckets":["my-bucket-1","my-bucket-2"],"iam_arns":["arn:aws:iam::123:role/my-role"]}'
+
+{
+  "arns": [
+    "arn:aws:sqs:us-east-1:123456789:my-queue",
+    "arn:aws:rds:us-east-1:123456789:db/mydb",
+    "arn:aws:lambda:us-east-1:123456789:function:my-fn",
+    "arn:aws:kms:us-east-1:123456789:key/my-key"
+  ],
+  "instance_ids": [
+    "i-0abc1234",
+    "sg-0abc1234",
+    "vol-0abc1234",
+    "vpce-0abc1234"
+  ],
+  "s3_buckets": [
+    "my-bucket-1",
+    "my-bucket-2"
+  ],
+  "iam_arns": [
+    "arn:aws:iam::123456789:role/my-role",
+    "arn:aws:iam::123456789:policy/my-policy"
+  ]
+}
+
+#-------
+
+def parse_extra_resources():
+    """
+    Reads EXTRA_RESOURCES env var — single JSON object with 4 keys.
+    Any key can be omitted or left as empty list — handled gracefully.
+    """
+    extra = []
+
+    raw = os.environ.get("EXTRA_RESOURCES", "")
+    if not raw:
+        log.info("No extra resources provided via EXTRA_RESOURCES")
+        return extra
+
+    try:
+        cleaned = raw.replace("\n", "").replace("\r", "").strip()
+        data = json.loads(cleaned)
+        #data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        log.error("Failed to parse EXTRA_RESOURCES JSON: %s", e)
+        return extra
+
+    # ── ARNs — any service except IAM and S3 ──────────────────────────────
+    for arn in data.get("arns", []):
+        extra.append({
+            "type":   "extra_arn",
+            "name":   arn.split(":")[-1],
+            "module": "extra",
+            "id":     None,
+            "arn":    arn,
+            "bucket": None,
+            "tags":   {}
+        })
+
+    # ── EC2 family IDs ────────────────────────────────────────────────────
+    for instance_id in data.get("instance_ids", []):
+        extra.append({
+            "type":   "extra_instance_id",
+            "name":   instance_id,
+            "module": "extra",
+            "id":     instance_id,
+            "arn":    None,
+            "bucket": None,
+            "tags":   {}
+        })
+
+    # ── S3 bucket names ───────────────────────────────────────────────────
+    for bucket in data.get("s3_buckets", []):
+        extra.append({
+            "type":   "aws_s3_bucket",
+            "name":   bucket,
+            "module": "extra",
+            "id":     bucket,
+            "arn":    f"arn:aws:s3:::{bucket}",
+            "bucket": bucket,
+            "tags":   {}
+        })
+
+    # ── IAM ARNs — native read + write ────────────────────────────────────
+    for arn in data.get("iam_arns", []):
+        # Determine if role or policy from ARN
+        rtype = "aws_iam_role" if ":role/" in arn else "aws_iam_policy"
+        extra.append({
+            "type":   rtype,
+            "name":   arn.split("/")[-1],
+            "module": "extra",
+            "id":     arn.split("/")[-1],  # role/policy name
+            "arn":    arn,
+            "bucket": None,
+            "tags":   {}
+        })
+
+    log.info("Extra resources loaded from EXTRA_RESOURCES: %d total", len(extra))
+    return extra
+
+    #-----
+    # Additional resources from EXTRA_RESOURCES env variable
+extra_resources = parse_extra_resources()
+
+# Merge both into single list — processed identically from here
+all_resources = state_resources + extra_resources
