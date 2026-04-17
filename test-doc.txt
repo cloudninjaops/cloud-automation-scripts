@@ -1,0 +1,105 @@
+Ad-Hoc Tagging for Terraform Workspace Resources
+
+1. Overview
+This solution allows engineers to add or update AWS resource tags in bulk across a Terraform Cloud (TFC) workspace — without modifying Terraform HCL code or triggering resource replacements.
+Use this when:
+
+A new tag (e.g. costcenter, BillingCode) needs to be applied to all existing resources
+Tags need to be updated across hundreds of resources at once
+Resources were deployed without the required tags and need to be patched
+
+The script reads the Terraform state file from the target workspace, collects all managed resources, and applies tags using AWS APIs. It also supports tagging resources that are not in the state file via the EXTRA_RESOURCES variable.
+
+2. How It Works
+
+1. Script starts in Workspace X
+2. Calls TFC API → downloads latest state file from Workspace A
+3. Parses state file → extracts all managed resources (type, id, arn, existing tags)
+4. Reads EXTRA_RESOURCES env var → parses additional resource IDs/ARNs not in state
+5. Merges both lists → deduplicates
+6. Assumes IAM role in Account B via sts:AssumeRole
+7. For each resource:
+      → Reads existing tags from AWS
+      → Compares with new tags
+      → Applies only what changed
+8. Prints summary report
+
+
+Tag Merge Logic
+For each resource, the script checks existing tags and applies the following logic:
+
+Scenario 1 — Resource has no tags
+   Action : Add new tags
+   Result : Resource now has the new tags
+
+Scenario 2 — Resource has some tags, new tag keys are absent
+   Action : Append new tags, leave existing ones untouched
+   Result : Resource has old tags + new tags
+
+Scenario 3 — Resource has new tag keys with same values
+   Action : Skip, do nothing
+   Result : No change
+
+Scenario 4 — Resource has new tag keys with different values
+   Action : Overwrite only the new tag keys, leave rest untouched
+   Result : Resource has updated tag values
+
+Scenario 5 — Resource type does not support tagging
+   Action : Skip and log
+   Result : No change
+
+
+Tagging API Routing
+
+Resource with ARN (most services)   → Resource Groups Tagging API
+IAM roles and policies              → IAM Native API (iam:TagRole, iam:TagPolicy)
+EC2 family without ARN              → EC2 Native API (ec2:create_tags with instance ID)
+Policy attachments / unsupported    → Skip
+
+5. How to Setup
+Step 1 — Create Ad-Hoc Tagging Workspace in TFC
+1. Go to app.terraform.io → your organization
+2. Create new workspace
+   Name        : adhoc-tagging-workspace
+   Type        : Version Control Workflow
+   VCS Repo    : <your repo containing main.tf and scripts/>
+   Agent Pool  : <your agent pool in Account A>
+Step 2 — Configure Workspace State Sharing
+1. Go to Workspace A (the target workspace) in TFC
+2. Settings → Remote State Sharing
+3. Enable sharing with : adhoc-tagging-workspace
+Step 3 — Set Workspace Environment Variables
+Go to adhoc-tagging-workspace → Variables → Add the following as Environment Variables:
+Variable                Value                                          Sensitive
+────────────────────────────────────────────────────────────────────────────────
+TFC_TOKEN               <TFC team token with read access to WS A>      Yes
+TFC_ORG                 <your TFC organization name>                    No
+WORKSPACE_NAME          <name of Workspace A>                           No
+AWS_REGION              us-east-1                                       No
+ACCOUNT_B_ROLE_ARN      arn:aws:iam::<account-b-id>:role/<role-name>   Yes
+TAG_COSTCENTER          100                                             No
+TAG_BILLINGCODE         xyz                                             No
+DRY_RUN                 true                                            No
+Note: Set DRY_RUN=true first to preview changes. Set to false when ready to apply.
+Step 4 — Set EXTRA_RESOURCES (optional)
+Use this to tag resources that are not tracked in Workspace A state file.
+Go to adhoc-tagging-workspace → Variables → Add as Environment Variable:
+Variable         : EXTRA_RESOURCES
+Sensitive        : No
+Copy and paste this template, fill in your values:
+{"arns": ["arn:aws:sqs:us-east-1:123456789:my-queue", "arn:aws:rds:us-east-1:123456789:db/mydb"], "instance_ids": ["i-0abc1234", "i-0def5678"], "s3_buckets": ["my-bucket-1", "my-bucket-2"], "iam_arns": ["arn:aws:iam::123456789:role/my-role"]}
+If you only have instance IDs and nothing else:
+{"instance_ids": ["i-0abc1234", "i-0def5678"]}
+Leave out any keys you don't need — the script handles missing keys gracefully.
+
+Step 5 — Run
+
+1. Go to adhoc-tagging-workspace in TFC
+2. Actions → Start New Run
+3. Review logs — check what tags will be added/updated
+4. If output looks correct:
+      → Set DRY_RUN = false in workspace variables
+      → Start New Run again to apply tags for real
+5. Review final summary in run logs:
+
+
