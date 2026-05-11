@@ -51,8 +51,8 @@ tagging:
         Optimize-DELETE: "05-2027"            # Date after which resource can be deleted
       resources_list:
         s3_buckets:
-          - windows-ami-export-test           # S3 bucket name only — no ARN needed
-          - windows-ami-import-test
+          - test-ami-export-test           # S3 bucket name only — no ARN needed
+          - test-ami-import-test
 
     # Tagset 2 — Apply rightsizing tag to EC2 instances
     # Use case: mark instances flagged for rightsizing review
@@ -61,8 +61,8 @@ tagging:
         Optimize-RIGHTSIZE: "05-2027"         # Date by which rightsizing should be completed
       resources_list:
         instance_ids:
-          - i-0542a7103ffedec99               # EC2 instance ID
-          - i-0ed5b3309b8c2d912               # Supports: EC2 (i-), SG (sg-), EBS (vol-), VPCE (vpce-)
+          - i-12344511111111111              # EC2 instance ID
+          - i-98765411111111111              # Supports: EC2 (i-), SG (sg-), EBS (vol-), VPCE (vpce-)
 
     # Tagset 3 — Apply backup policy tag to specific EC2 instances
     # Use case: mark instances that require daily backup
@@ -72,8 +72,8 @@ tagging:
         retention_days:   "30"               # Number of days to retain backups
       resources_list:
         instance_ids:
-          - i-0542a7103ffedec99
-          - i-0ed5b3309b8c2d912
+          - i-12344511111111111   
+          - i-98765411111111111
 
     # Tagset 4 — Apply cost allocation tags to mixed resource types
     # Use case: apply cost center and billing code to specific resources
@@ -86,14 +86,14 @@ tagging:
       resources_list:
         arns:
           # Use full ARNs for any AWS service supported by Resource Groups Tagging API
-          - arn:aws:sqs:us-east-1:123456789012:test-sbx-sb-e1-sqs-sbp-02.fifo
-          - arn:aws:lambda:us-east-1:123456789012:function:test-sbx-sb-e1-tst-lbd-app-01
+          - arn:aws:sqs:us-east-1:123456789012:test-app.fifo
+          - arn:aws:lambda:us-east-1:123456789012:function:test-lbdapp-01
           - arn:aws:rds:us-east-1:123456789012:db:my-rds-instance
           - arn:aws:sns:us-east-1:123456789012:my-sns-topic
         instance_ids:
           # EC2 family resource IDs — ARN not needed, script constructs it
-          - i-0542a7103ffedec99
-          - i-0ed5b3309b8c2d912
+          - i-12344511111111111   
+          - i-98765411111111111
         s3_buckets:
           # S3 bucket names only — not ARNs
           - my-app-data-bucket
