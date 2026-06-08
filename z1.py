@@ -1,7 +1,12 @@
 """
 Dynatrace Dashboard 2.0 Creator — Lambda Monitoring
-Targets lambdas with prefix: ab-xyz-cdf-
 Uses: /platform/document/v1/documents API
+
+Verified metrics for this environment:
+  dt.cloud.aws.lambda.invocations
+  dt.cloud.aws.lambda.errors
+  dt.cloud.aws.lambda.duration
+  dt.cloud.aws.lambda.throttlers
 """
 
 import json
@@ -12,13 +17,13 @@ import sys
 # ──────────────────────────────────────────────
 # CONFIG — fill these in or set env vars
 # ──────────────────────────────────────────────
-DT_BASE_URL = "https://xyz.apps.dynatrace.com"        # your DT base URL
+DT_BASE_URL  = "https://xyz.apps.dynatrace.com"       # your DT base URL
 DT_API_TOKEN = os.environ.get("DT_API_TOKEN", "")     # set env var or paste token here
-LAMBDA_PREFIX = "ab-xyz-cdf-"                          # your lambda prefix
+LAMBDA_PREFIX  = "ab-xyz-cdf-"                        # your lambda prefix
 DASHBOARD_NAME = "Lambda Monitoring - ab-xyz-cdf"
 # ──────────────────────────────────────────────
 
-# NOTE: No Content-Type here — requests sets it automatically for multipart
+# No Content-Type — requests sets it automatically for multipart
 HEADERS = {
     "Authorization": f"Api-Token {DT_API_TOKEN}",
 }
@@ -27,46 +32,51 @@ HEADERS = {
 def build_dashboard_payload(name: str, prefix: str) -> dict:
     """
     Builds the Dynatrace Dashboard 2.0 document payload.
-    Each tile uses DQL queries scoped to the lambda prefix.
+    All DQL queries use verified metric names scoped to lambda prefix.
     """
 
-    # DQL queries
+    # ── Metric tiles ──────────────────────────────────────────────────────────
+
     q_invocations = (
-        f'timeseries invocations = sum(aws.lambda.invocations), '
+        f'timeseries invocations = sum(dt.cloud.aws.lambda.invocations), '
         f'by: {{entity.name}} '
         f'| filter matchesPhrase(entity.name, "{prefix}")'
     )
 
-    q_error_rate = (
-        f'timeseries errors = sum(aws.lambda.errors), invocations = sum(aws.lambda.invocations), '
+    q_errors = (
+        f'timeseries errors = sum(dt.cloud.aws.lambda.errors), '
         f'by: {{entity.name}} '
-        f'| filter matchesPhrase(entity.name, "{prefix}") '
-        f'| fieldsAdd error_rate = if(invocations > 0, (errors / invocations) * 100, else: 0)'
+        f'| filter matchesPhrase(entity.name, "{prefix}")'
     )
 
     q_avg_duration = (
-        f'timeseries avg_duration = avg(aws.lambda.duration), '
+        f'timeseries avg_duration = avg(dt.cloud.aws.lambda.duration), '
         f'by: {{entity.name}} '
         f'| filter matchesPhrase(entity.name, "{prefix}")'
     )
 
     q_p95_duration = (
-        f'timeseries p95_duration = percentile(aws.lambda.duration, 95), '
+        f'timeseries p95_duration = percentile(dt.cloud.aws.lambda.duration, 95), '
         f'by: {{entity.name}} '
         f'| filter matchesPhrase(entity.name, "{prefix}")'
     )
 
-    q_throttles = (
-        f'timeseries throttles = sum(aws.lambda.throttles), '
+    q_throttlers = (
+        f'timeseries throttlers = sum(dt.cloud.aws.lambda.throttlers), '
         f'by: {{entity.name}} '
         f'| filter matchesPhrase(entity.name, "{prefix}")'
     )
 
-    q_cold_starts = (
-        f'timeseries cold_starts = sum(aws.lambda.init_duration, default: 0), '
+    # Error rate derived: errors / invocations * 100
+    q_error_rate = (
+        f'timeseries errors = sum(dt.cloud.aws.lambda.errors), '
+        f'invocations = sum(dt.cloud.aws.lambda.invocations), '
         f'by: {{entity.name}} '
-        f'| filter matchesPhrase(entity.name, "{prefix}")'
+        f'| filter matchesPhrase(entity.name, "{prefix}") '
+        f'| fieldsAdd error_rate = if(invocations[0] > 0, (errors[0] / invocations[0]) * 100, else: 0)'
     )
+
+    # ── Log tile ──────────────────────────────────────────────────────────────
 
     q_error_logs = (
         f'fetch logs '
@@ -77,39 +87,34 @@ def build_dashboard_payload(name: str, prefix: str) -> dict:
         f'| fields timestamp, aws.log_group, content'
     )
 
-    # Tile builder helper
+    # ── Tile builder helper ───────────────────────────────────────────────────
+
     def tile(tile_id, title, query, tile_type="LINE_CHART", col=0, row=0, w=6, h=4):
         return {
             "id": tile_id,
             "type": tile_type,
             "title": title,
             "query": query,
-            "layout": {
-                "x": col,
-                "y": row,
-                "w": w,
-                "h": h,
-            },
+            "layout": {"x": col, "y": row, "w": w, "h": h},
             "querySettings": {
                 "maxResultRecords": 1000,
                 "defaultTimeframeForLocalQueries": "now-2h",
             },
         }
 
-    tiles = [
-        # Row 1 — Invocations + Error Rate
-        tile("tile-invocations",  "Invocations",      q_invocations,  "LINE_CHART", col=0,  row=0,  w=6, h=4),
-        tile("tile-error-rate",   "Error Rate (%)",   q_error_rate,   "LINE_CHART", col=6,  row=0,  w=6, h=4),
+    # ── Layout ────────────────────────────────────────────────────────────────
+    # Row 1 — Invocations | Errors
+    # Row 2 — Avg Duration | P95 Duration
+    # Row 3 — Throttlers | Error Rate %
+    # Row 4 — Recent Error Logs (full width)
 
-        # Row 2 — Duration
+    tiles = [
+        tile("tile-invocations",  "Invocations",       q_invocations,  "LINE_CHART", col=0,  row=0,  w=6, h=4),
+        tile("tile-errors",       "Errors",            q_errors,       "LINE_CHART", col=6,  row=0,  w=6, h=4),
         tile("tile-avg-duration", "Avg Duration (ms)", q_avg_duration, "LINE_CHART", col=0,  row=4,  w=6, h=4),
         tile("tile-p95-duration", "P95 Duration (ms)", q_p95_duration, "LINE_CHART", col=6,  row=4,  w=6, h=4),
-
-        # Row 3 — Throttles + Cold Starts
-        tile("tile-throttles",    "Throttles",         q_throttles,    "LINE_CHART", col=0,  row=8,  w=6, h=4),
-        tile("tile-cold-starts",  "Cold Starts",       q_cold_starts,  "LINE_CHART", col=6,  row=8,  w=6, h=4),
-
-        # Row 4 — Error Logs (full width)
+        tile("tile-throttlers",   "Throttlers",        q_throttlers,   "LINE_CHART", col=0,  row=8,  w=6, h=4),
+        tile("tile-error-rate",   "Error Rate (%)",    q_error_rate,   "LINE_CHART", col=6,  row=8,  w=6, h=4),
         tile("tile-error-logs",   "Recent Error Logs", q_error_logs,   "TABLE",      col=0,  row=12, w=12, h=6),
     ]
 
@@ -143,16 +148,15 @@ def create_dashboard():
     url = f"{DT_BASE_URL}/platform/document/v1/documents"
     payload = build_dashboard_payload(DASHBOARD_NAME, LAMBDA_PREFIX)
 
-    print(f"Creating dashboard: {DASHBOARD_NAME}")
-    print(f"Endpoint: {url}\n")
+    print(f"Creating dashboard : {DASHBOARD_NAME}")
+    print(f"Endpoint           : {url}\n")
 
     # Document API requires multipart/form-data — NOT application/json
-    # 'content' field must be a JSON string sent as a file-like part
     multipart = {
-        "name":       (None, payload["name"]),
-        "type":       (None, payload["type"]),
-        "isPrivate":  (None, str(payload["isPrivate"]).lower()),
-        "content":    ("content", payload["content"], "application/json"),
+        "name":      (None, payload["name"]),
+        "type":      (None, payload["type"]),
+        "isPrivate": (None, str(payload["isPrivate"]).lower()),
+        "content":   ("content", payload["content"], "application/json"),
     }
 
     response = requests.post(url, headers=HEADERS, files=multipart)
@@ -161,12 +165,12 @@ def create_dashboard():
         data = response.json()
         doc_id = data.get("id", "unknown")
         print(f"✅ Dashboard created successfully!")
-        print(f"   ID   : {doc_id}")
-        print(f"   URL  : {DT_BASE_URL}/ui/document/{doc_id}")
+        print(f"   ID  : {doc_id}")
+        print(f"   URL : {DT_BASE_URL}/ui/document/{doc_id}")
     else:
         print(f"❌ Failed to create dashboard")
-        print(f"   Status : {response.status_code}")
-        print(f"   Response: {response.text}")
+        print(f"   Status   : {response.status_code}")
+        print(f"   Response : {response.text}")
         sys.exit(1)
 
 
