@@ -5,22 +5,22 @@ Uses: /platform/document/v1/documents API
 """
 
 import json
+import os
 import requests
 import sys
 
 # ──────────────────────────────────────────────
-# CONFIG — fill these in
+# CONFIG — fill these in or set env vars
 # ──────────────────────────────────────────────
-DT_BASE_URL = "https://xyz.apps.dynatrace.com"   # your DT base URL
-DT_API_TOKEN = "dt0c01.XXXX"                      # your API token
-LAMBDA_PREFIX = "ab-xyz-cdf-"                     # your lambda prefix
+DT_BASE_URL = "https://xyz.apps.dynatrace.com"        # your DT base URL
+DT_API_TOKEN = os.environ.get("DT_API_TOKEN", "")     # set env var or paste token here
+LAMBDA_PREFIX = "ab-xyz-cdf-"                          # your lambda prefix
 DASHBOARD_NAME = "Lambda Monitoring - ab-xyz-cdf"
 # ──────────────────────────────────────────────
 
-
+# NOTE: No Content-Type here — requests sets it automatically for multipart
 HEADERS = {
     "Authorization": f"Api-Token {DT_API_TOKEN}",
-    "Content-Type": "application/json",
 }
 
 
@@ -146,7 +146,16 @@ def create_dashboard():
     print(f"Creating dashboard: {DASHBOARD_NAME}")
     print(f"Endpoint: {url}\n")
 
-    response = requests.post(url, headers=HEADERS, json=payload)
+    # Document API requires multipart/form-data — NOT application/json
+    # 'content' field must be a JSON string sent as a file-like part
+    multipart = {
+        "name":       (None, payload["name"]),
+        "type":       (None, payload["type"]),
+        "isPrivate":  (None, str(payload["isPrivate"]).lower()),
+        "content":    ("content", payload["content"], "application/json"),
+    }
+
+    response = requests.post(url, headers=HEADERS, files=multipart)
 
     if response.status_code in (200, 201):
         data = response.json()
